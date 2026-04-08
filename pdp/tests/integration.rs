@@ -12,7 +12,8 @@ use tokio::net::TcpListener;
 async fn start_server() -> SocketAddr {
     let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("policies");
     let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
-    let state: cedar_pdp::handlers::AppState = Arc::new(store);
+    let state: cedar_pdp::handlers::AppState =
+        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
 
     let app = Router::new()
         .route("/v1/is_authorized", post(cedar_pdp::handlers::is_authorized))
@@ -115,7 +116,8 @@ async fn start_claims_server() -> SocketAddr {
         .unwrap()
         .join("policies");
     let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load production policies");
-    let state: cedar_pdp::handlers::AppState = Arc::new(store);
+    let state: cedar_pdp::handlers::AppState =
+        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
 
     let app = Router::new()
         .route("/v1/is_authorized", post(cedar_pdp::handlers::is_authorized))

@@ -7,8 +7,10 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin pdp
 COPY --from=builder /app/pdp/target/release/cedar-pdp /usr/local/bin/cedar-pdp
 COPY --from=builder /app/policies/ /policies/
 ENV CEDAR_POLICY_DIR=/policies
 EXPOSE 8180
+USER pdp
 CMD ["cedar-pdp"]

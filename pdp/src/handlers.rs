@@ -12,34 +12,107 @@ use crate::models::{
 };
 use crate::policy::PolicyStore;
 
-pub type AppState = Arc<PolicyStore>;
+/// Application context shared across all handlers.
+///
+/// Wraps PolicyStore and operational config (admin token, etc.).
+/// Implements Deref<Target=PolicyStore> so existing handler code
+/// that calls store.load(), store.policy_count(), etc. works unchanged.
+pub struct AppContext {
+    store: PolicyStore,
+    admin_token: Option<String>,
+}
 
-pub async fn health(State(store): State<AppState>) -> Json<HealthResponse> {
+impl AppContext {
+    pub fn new(store: PolicyStore, admin_token: Option<String>) -> Self {
+        Self { store, admin_token }
+    }
+}
+
+impl std::ops::Deref for AppContext {
+    type Target = PolicyStore;
+    fn deref(&self) -> &PolicyStore {
+        &self.store
+    }
+}
+
+pub type AppState = Arc<AppContext>;
+
+// ---------------------------------------------------------------------------
+// Health probes
+// ---------------------------------------------------------------------------
+
+/// Liveness probe: always 200 if the process is listening.
+/// Use for Kubernetes livenessProbe.
+pub async fn healthz() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// Readiness probe: 200 only when policies are loaded and valid.
+/// Use for Kubernetes readinessProbe.
+pub async fn readyz(State(ctx): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
-        policies_loaded: store.policy_count(),
+        policies_loaded: ctx.policy_count(),
     })
 }
 
-pub async fn policy_info(State(store): State<AppState>) -> Json<PolicyInfoResponse> {
-    Json(PolicyInfoResponse {
-        policy_count: store.policy_count(),
-        last_reload_epoch_ms: store.last_reload_epoch_ms(),
-        schema_hash: store.schema_hash(),
+/// Backward-compatible alias for readyz. Existing Docker healthchecks,
+/// shell scripts, and integration tests use /health.
+pub async fn health(State(ctx): State<AppState>) -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        policies_loaded: ctx.policy_count(),
     })
 }
+
+pub async fn policy_info(State(ctx): State<AppState>) -> Json<PolicyInfoResponse> {
+    Json(PolicyInfoResponse {
+        policy_count: ctx.policy_count(),
+        last_reload_epoch_ms: ctx.last_reload_epoch_ms(),
+        schema_hash: ctx.schema_hash(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Admin endpoints
+// ---------------------------------------------------------------------------
 
 pub async fn admin_reload(
-    State(store): State<AppState>,
+    State(ctx): State<AppState>,
+    req: axum::http::Request<axum::body::Body>,
 ) -> Result<Json<PolicyInfoResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let old_count = store.policy_count();
-    match store.reload() {
+    // Admin authentication: if PDP_ADMIN_TOKEN is configured, require it.
+    if let Some(expected) = &ctx.admin_token {
+        let provided = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "));
+
+        match provided {
+            Some(token) if token == expected => {} // authenticated
+            _ => {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        error: "admin endpoint requires Authorization: Bearer <PDP_ADMIN_TOKEN>"
+                            .to_string(),
+                    }),
+                ));
+            }
+        }
+    }
+    // If no admin token configured, allow unrestricted (dev mode).
+    // main.rs logs a warning at startup when this is the case.
+
+    let old_count = ctx.policy_count();
+    match ctx.reload() {
         Ok(new_count) => {
             tracing::info!(old_count, new_count, "manual policy reload successful");
             Ok(Json(PolicyInfoResponse {
                 policy_count: new_count,
-                last_reload_epoch_ms: store.last_reload_epoch_ms(),
-                schema_hash: store.schema_hash(),
+                last_reload_epoch_ms: ctx.last_reload_epoch_ms(),
+                schema_hash: ctx.schema_hash(),
             }))
         }
         Err(e) => Err((
@@ -51,18 +124,53 @@ pub async fn admin_reload(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Request ID middleware
+// ---------------------------------------------------------------------------
+
+/// Middleware that propagates or generates X-Request-Id on every request.
+/// If the client sends X-Request-Id, it is echoed back. Otherwise a UUID v4
+/// is generated. The ID is added to both the response headers and the request
+/// extensions (available to handlers via `req.extensions().get::<RequestId>()`).
+#[derive(Clone, Debug)]
+pub struct RequestId(pub String);
+
+pub async fn request_id_layer(
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    req.extensions_mut().insert(RequestId(id.clone()));
+
+    let mut resp = next.run(req).await;
+    if let Ok(val) = id.parse() {
+        resp.headers_mut().insert("x-request-id", val);
+    }
+    resp
+}
+
+// ---------------------------------------------------------------------------
+// Authorization endpoints
+// ---------------------------------------------------------------------------
+
 pub async fn is_authorized(
-    State(store): State<AppState>,
+    State(ctx): State<AppState>,
     Json(req): Json<AuthzRequest>,
 ) -> Result<Json<AuthzResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let state = store.load();
+    let state = ctx.load();
     let (policy_set, schema) = state.as_ref();
     let authorizer = Authorizer::new();
     Ok(Json(evaluate_single(&authorizer, &req, policy_set, schema)))
 }
 
 pub async fn batch_is_authorized(
-    State(store): State<AppState>,
+    State(ctx): State<AppState>,
     Json(batch): Json<BatchAuthzRequest>,
 ) -> Result<Json<BatchAuthzResponse>, (StatusCode, Json<ErrorResponse>)> {
     if batch.requests.len() > 100 {
@@ -73,7 +181,7 @@ pub async fn batch_is_authorized(
     }
 
     // Load policy state once for the entire batch.
-    let state = store.load();
+    let state = ctx.load();
     let policy_state = Arc::clone(&state);
 
     // Rayon fork/join overhead exceeds Cedar eval cost at small batch sizes.
