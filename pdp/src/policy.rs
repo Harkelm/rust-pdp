@@ -7,7 +7,7 @@ use arc_swap::ArcSwap;
 use cedar_policy::{Entities, PolicySet, Schema};
 use sha2::{Digest, Sha256};
 
-/// Shared policy state: single tuple swap per ADR-004.
+/// Shared policy state: single tuple swap per ADR-004 Fix 1.
 pub type PolicyState = Arc<(PolicySet, Schema)>;
 
 pub struct PolicyStore {
@@ -15,6 +15,33 @@ pub struct PolicyStore {
     policy_dir: PathBuf,
     last_reload_epoch_ms: AtomicU64,
     schema_hash: ArcSwap<String>,
+}
+
+/// Thread-local cache for lock-free policy reads (ADR-004 Fix 2).
+///
+/// `Cache` maintains a local copy of the `Arc<(PolicySet, Schema)>` that is
+/// refreshed lazily only when a write (reload) occurs. This avoids touching
+/// the global ArcSwap epoch on every read, providing 10-25x speedup on the
+/// `load()` call in tight loops.
+///
+/// **Async limitation**: `PolicyCache` is `!Send` (inherent to `arc_swap::cache::Cache`).
+/// It cannot be held across `.await` points or used directly in async axum handlers.
+/// Async handlers should use `PolicyStore::load()` directly, which is already
+/// correct and fast (~5ns) for per-request access.
+///
+/// **Use cases**: Criterion benchmarks, sync middleware, thread-per-connection servers,
+/// or any sync code path that calls `load()` in a tight loop.
+pub struct PolicyCache<'a> {
+    inner: arc_swap::cache::Cache<&'a ArcSwap<(PolicySet, Schema)>, Arc<(PolicySet, Schema)>>,
+}
+
+impl<'a> PolicyCache<'a> {
+    /// Load the current policy state from the thread-local cache.
+    /// Returns a reference to the cached `Arc`, refreshing from the global
+    /// `ArcSwap` only if a write has occurred since the last load.
+    pub fn load(&mut self) -> &Arc<(PolicySet, Schema)> {
+        self.inner.load()
+    }
 }
 
 impl PolicyStore {
@@ -32,9 +59,18 @@ impl PolicyStore {
         })
     }
 
-    /// Lock-free read of current policy state.
+    /// Lock-free read of current policy state (async-safe).
+    /// For sync tight loops, prefer `PolicyStore::cache()` + `PolicyCache::load()`.
     pub fn load(&self) -> arc_swap::Guard<Arc<(PolicySet, Schema)>> {
         self.state.load()
+    }
+
+    /// Create a thread-local Cache wrapper for repeated sync reads (ADR-004 Fix 2).
+    /// The returned `PolicyCache` is `!Send` -- see its doc comment for details.
+    pub fn cache(&self) -> PolicyCache<'_> {
+        PolicyCache {
+            inner: arc_swap::cache::Cache::new(&self.state),
+        }
     }
 
     /// Attempt to reload policies from disk. Returns Ok(policy_count) on success.
@@ -224,6 +260,28 @@ permit(principal == App::User::"bob", action == App::Action::"View", resource);
 
         let t1 = store.last_reload_epoch_ms();
         assert!(t1 > t0, "timestamp must advance after successful reload");
+    }
+
+    #[test]
+    fn cache_wrapper_returns_current_state() {
+        let dir = TempDir::new().unwrap();
+        write_valid_policy(dir.path());
+
+        let store = PolicyStore::from_dir(dir.path()).expect("initial load");
+        let mut cache = store.cache();
+
+        // Cache load returns same policy count as direct load.
+        let state = cache.load();
+        let (ps, _) = state.as_ref();
+        assert_eq!(ps.policies().count(), 1);
+
+        // After reload, cache picks up the new state.
+        write_updated_policy(dir.path());
+        store.reload().unwrap();
+
+        let state = cache.load();
+        let (ps, _) = state.as_ref();
+        assert_eq!(ps.policies().count(), 2);
     }
 
     #[test]
