@@ -313,3 +313,40 @@ cd benchmarks && bash stampede_sim.sh
 Hardware note: Run benchmarks with no background load. On Linux, use
 `cpupower frequency-set -g performance` to disable CPU frequency scaling for
 consistent results.
+
+## Security Findings
+
+### Empty-org policy bypass (fixed)
+
+The `org_scoped_access.cedar` permit compared `principal.org == resource.owner_org`
+without guarding against empty/missing values. When `claims.org` was absent, both
+attributes defaulted to `""`, causing the equality check to pass and granting
+read+write access to any user with only a `sub` claim (no org, no roles, no scopes).
+
+**Fix (defense in depth):**
+1. Entity builder (`entities.rs`): missing `claims.org` now maps to `"__unset__"` sentinel instead of `""`.
+2. Policy (`org_scoped_access.cedar`): added guard clause `principal.org != "" && principal.org != "__unset__"`.
+
+Both layers must fail for the bypass to recur. Found via policy interaction testing (policy_coverage.rs).
+
+## Optimization Tracks (Not Yet Implemented)
+
+### Batch admission control (RT-26 AGI-Acc F2)
+
+The 100-item batch cap prevents oversized single requests but provides no
+per-second backpressure. At 1000 concurrent clients each sending 100-item batches,
+the rayon thread pool absorbs the CPU load but there is no mechanism to reject or
+queue excess requests before they enter evaluation. A `tower::ConcurrencyLimit`
+layer on the batch endpoint (e.g., max 32 concurrent batch evaluations) would
+bound the in-flight work and return 503+Retry-After when saturated.
+
+### Entity construction caching (RT-26 AGI-Acc F1/F4)
+
+Entity construction from JWT claims costs ~10.7 us per request -- the same order
+of magnitude as Cedar evaluation itself (~9.6 us with production policies). For
+agent workloads where the same role/org/tier patterns repeat across thousands of
+requests, a small LRU cache of pre-validated entity sets (keyed on the claims
+hash) could serve the majority of requests from a lookup. At 50 roles per agent
+delegation chain, entity construction reaches ~93 us, making this optimization
+increasingly valuable as role counts grow. This is premature for current
+human-request workloads but becomes load-bearing at agent scale.

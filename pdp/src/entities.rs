@@ -95,10 +95,13 @@ pub fn build_entities(
     request_ctx: &RequestContext,
     schema: Option<&Schema>,
 ) -> Result<Entities, EntityBuildError> {
-    let mut entity_vec: Vec<Entity> = Vec::new();
+    let n_roles = claims.roles.as_ref().map_or(0, |r| r.len());
+    // roles + org (optional) + user + resource
+    let mut entity_vec: Vec<Entity> = Vec::with_capacity(n_roles + 3);
 
     // --- Role entities ---
-    let mut user_parents: HashSet<EntityUid> = HashSet::new();
+    // roles + org (optional)
+    let mut user_parents: HashSet<EntityUid> = HashSet::with_capacity(n_roles + 1);
 
     if let Some(roles) = &claims.roles {
         for role_name in roles {
@@ -123,7 +126,7 @@ pub fn build_entities(
     let user_uid =
         entity_uid("ApiGateway::User", &claims.sub).map_err(EntityBuildError::TypeName)?;
 
-    let mut user_attrs: HashMap<String, RestrictedExpression> = HashMap::new();
+    let mut user_attrs: HashMap<String, RestrictedExpression> = HashMap::with_capacity(6);
 
     user_attrs.insert(
         "email".to_string(),
@@ -133,9 +136,12 @@ pub fn build_entities(
         "department".to_string(),
         RestrictedExpression::new_string(claims.department.clone().unwrap_or_default()),
     );
+    // Use sentinel for missing org to prevent empty-string equality matches
+    // in org-scoped policies (see org_scoped_access.cedar guard clause).
+    let org_value = claims.org.clone().unwrap_or_else(|| "__unset__".to_string());
     user_attrs.insert(
         "org".to_string(),
-        RestrictedExpression::new_string(claims.org.clone().unwrap_or_default()),
+        RestrictedExpression::new_string(org_value),
     );
     user_attrs.insert(
         "subscription_tier".to_string(),
@@ -170,7 +176,7 @@ pub fn build_entities(
     let resource_uid = entity_uid("ApiGateway::ApiResource", &request_ctx.path)
         .map_err(EntityBuildError::TypeName)?;
 
-    let mut resource_attrs: HashMap<String, RestrictedExpression> = HashMap::new();
+    let mut resource_attrs: HashMap<String, RestrictedExpression> = HashMap::with_capacity(5);
     resource_attrs.insert(
         "service".to_string(),
         RestrictedExpression::new_string(
@@ -194,7 +200,9 @@ pub fn build_entities(
     );
     resource_attrs.insert(
         "owner_org".to_string(),
-        RestrictedExpression::new_string(claims.org.clone().unwrap_or_default()),
+        RestrictedExpression::new_string(
+            claims.org.clone().unwrap_or_else(|| "__unset__".to_string()),
+        ),
     );
 
     let resource_entity = Entity::new(resource_uid, resource_attrs, HashSet::new())?;

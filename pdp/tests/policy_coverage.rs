@@ -312,7 +312,9 @@ async fn test_data_scope_no_matching_classification_denied() {
 #[tokio::test]
 async fn test_data_scope_empty_scopes_no_org_denied() {
     let addr = start_server().await;
-    // User with empty scopes AND no org (defeats org-scoped permit too).
+    // User with empty scopes AND no org. The org-scoped policy guard clause
+    // rejects empty/sentinel org values, so no org-scoped permit fires.
+    // No roles, no scopes match either. Full deny.
     let claims = serde_json::json!({
         "sub": "isolated-user",
         "email": "isolated@example.com",
@@ -323,13 +325,9 @@ async fn test_data_scope_empty_scopes_no_org_denied() {
         "allowed_scopes": []
     });
     let body = authz(addr, "GET", "/api/v1/data", claims).await;
-    // No roles, no scopes match, no org → org-scoped fires because
-    // principal.org defaults to "" and resource.owner_org also defaults to ""
-    // (both from claims.org which is None → ""). Empty string == empty string → permit.
-    // This documents a potentially surprising behavior.
     assert_eq!(
-        body["decision"], "Allow",
-        "empty org defaults match: principal.org '' == resource.owner_org '' (documented behavior)"
+        body["decision"], "Deny",
+        "user with no org, no roles, no scopes must be denied"
     );
 }
 

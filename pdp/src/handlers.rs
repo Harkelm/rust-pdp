@@ -57,7 +57,8 @@ pub async fn is_authorized(
 ) -> Result<Json<AuthzResponse>, (StatusCode, Json<ErrorResponse>)> {
     let state = store.load();
     let (policy_set, schema) = state.as_ref();
-    Ok(Json(evaluate_single(&req, policy_set, schema)))
+    let authorizer = Authorizer::new();
+    Ok(Json(evaluate_single(&authorizer, &req, policy_set, schema)))
 }
 
 pub async fn batch_is_authorized(
@@ -75,16 +76,26 @@ pub async fn batch_is_authorized(
     let state = store.load();
     let policy_state = Arc::clone(&state);
 
-    // Use rayon for CPU-bound parallel evaluation instead of spawn_blocking
-    // per sub-request, which would saturate tokio's blocking thread pool.
+    // Rayon fork/join overhead exceeds Cedar eval cost at small batch sizes.
+    // Sequential for < 4 items; parallel via rayon for larger batches.
+    const RAYON_THRESHOLD: usize = 4;
+
     let requests = batch.requests;
     let responses = tokio::task::spawn_blocking(move || {
-        use rayon::prelude::*;
         let (policy_set, schema) = policy_state.as_ref();
-        requests
-            .par_iter()
-            .map(|req| evaluate_single(req, policy_set, schema))
-            .collect::<Vec<AuthzResponse>>()
+        let authorizer = Authorizer::new();
+        if requests.len() < RAYON_THRESHOLD {
+            requests
+                .iter()
+                .map(|req| evaluate_single(&authorizer, req, policy_set, schema))
+                .collect::<Vec<AuthzResponse>>()
+        } else {
+            use rayon::prelude::*;
+            requests
+                .par_iter()
+                .map(|req| evaluate_single(&authorizer, req, policy_set, schema))
+                .collect::<Vec<AuthzResponse>>()
+        }
     })
     .await
     .map_err(|e| {
@@ -101,8 +112,8 @@ pub async fn batch_is_authorized(
 
 /// Evaluate a single authorization request against the given policy set and schema.
 /// Returns `AuthzResponse` directly -- errors are mapped to Deny with diagnostics.
-fn evaluate_single(req: &AuthzRequest, policy_set: &PolicySet, schema: &Schema) -> AuthzResponse {
-    match evaluate_single_inner(req, policy_set, schema) {
+fn evaluate_single(authorizer: &Authorizer, req: &AuthzRequest, policy_set: &PolicySet, schema: &Schema) -> AuthzResponse {
+    match evaluate_single_inner(authorizer, req, policy_set, schema) {
         Ok(resp) => resp,
         Err(msg) => AuthzResponse {
             decision: "Deny".to_string(),
@@ -116,6 +127,7 @@ fn evaluate_single(req: &AuthzRequest, policy_set: &PolicySet, schema: &Schema) 
 
 /// Inner evaluation that can fail. Errors are surfaced as Deny by the caller.
 fn evaluate_single_inner(
+    authorizer: &Authorizer,
     req: &AuthzRequest,
     policy_set: &PolicySet,
     schema: &Schema,
@@ -149,7 +161,6 @@ fn evaluate_single_inner(
     let cedar_request = Request::new(principal, action, resource, context, Some(schema))
         .map_err(|e| format!("invalid request: {e}"))?;
 
-    let authorizer = Authorizer::new();
     let response = authorizer.is_authorized(&cedar_request, policy_set, &entities);
 
     let decision = match response.decision() {

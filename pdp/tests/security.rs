@@ -271,16 +271,14 @@ async fn test_claims_missing_sub_rejected() {
 }
 
 #[tokio::test]
-async fn test_claims_only_sub_gets_org_scoped_permit() {
+async fn test_claims_only_sub_denied_no_org() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
     // Only `sub` provided -- all optional fields default. User has no roles,
-    // no org, suspended=false by default. The org-scoped-read-write permit
-    // fires because principal.org defaults to "" and resource.owner_org also
-    // defaults to "" (both from claims.org=None). Empty string == empty string.
-    // This documents a policy design consideration: org-scoped permit is very
-    // broad when org defaults to empty.
+    // no org (defaults to "__unset__" sentinel), suspended=false. The org-scoped
+    // policy guard clause rejects "__unset__" and "", so no org-scoped permit fires.
+    // No roles means no RBAC permit. No scopes means no data-scope permit. Deny.
     let resp = client
         .post(format!("http://{addr}/v1/is_authorized"))
         .json(&serde_json::json!({
@@ -298,8 +296,8 @@ async fn test_claims_only_sub_gets_org_scoped_permit() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(
-        body["decision"], "Allow",
-        "sub-only user allowed via org-scoped permit (empty org == empty owner_org)"
+        body["decision"], "Deny",
+        "sub-only user must be denied (empty-org guard prevents org-scoped permit)"
     );
 }
 
