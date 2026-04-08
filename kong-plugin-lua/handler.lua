@@ -16,6 +16,34 @@ local CedarAuthHandler = {
   VERSION = "0.1.0",
 }
 
+-- Decision cache (ADR-003 mandatory plugin-side decision cache).
+-- Per-worker in-memory cache with TTL expiry. Key: principal|action|resource.
+-- Only Allow/Deny decisions are cached; errors/timeouts are never cached.
+local decision_cache = {}
+
+local function cache_key(principal, action, resource)
+  return principal .. "|" .. action .. "|" .. resource
+end
+
+local function cache_lookup(key)
+  local entry = decision_cache[key]
+  if not entry then
+    return nil
+  end
+  if ngx.now() > entry.expiry then
+    decision_cache[key] = nil
+    return nil
+  end
+  return entry.decision
+end
+
+local function cache_store(key, decision, ttl_seconds)
+  decision_cache[key] = {
+    decision = decision,
+    expiry = ngx.now() + ttl_seconds,
+  }
+end
+
 -- Extract the principal identifier from the Kong request context.
 -- Resolution order:
 --   1. Kong consumer (set by authentication plugins upstream)
@@ -59,10 +87,28 @@ function CedarAuthHandler:access(conf)
   local method       = kong.request.get_method()
   local path         = kong.request.get_path()
 
+  local principal = to_cedar_principal(principal_id)
+  local action    = to_cedar_action(method)
+  local resource  = to_cedar_resource(path)
+
+  -- Cache lookup (ADR-003 mandatory plugin-side decision cache).
+  local key = cache_key(principal, action, resource)
+  local cached = cache_lookup(key)
+  if cached then
+    if cached == "Allow" then
+      kong.log.debug("cedar-pdp: cache hit Allow for principal=", principal_id,
+        " ", method, " ", path)
+      return
+    end
+    kong.log.info("cedar-pdp: cache hit Deny for principal=", principal_id,
+      " ", method, " ", path)
+    return kong.response.exit(403, { message = "forbidden" })
+  end
+
   local payload = {
-    principal = to_cedar_principal(principal_id),
-    action    = to_cedar_action(method),
-    resource  = to_cedar_resource(path),
+    principal = principal,
+    action    = action,
+    resource  = resource,
     context   = {},
   }
 
@@ -115,14 +161,17 @@ function CedarAuthHandler:access(conf)
   end
 
   local decision = response.decision
+  local cache_ttl = (conf.cache_ttl_ms or 30000) / 1000
 
-  -- Allow -> pass through, do nothing.
+  -- Allow -> cache and pass through.
   if decision == "Allow" then
+    cache_store(key, "Allow", cache_ttl)
     kong.log.debug("cedar-pdp: Allow for principal=", principal_id, " ", method, " ", path)
     return
   end
 
-  -- Deny (or any unrecognised decision) -> 403.
+  -- Deny (or any unrecognised decision) -> cache and 403.
+  cache_store(key, decision, cache_ttl)
   kong.log.info("cedar-pdp: Deny for principal=", principal_id, " ", method, " ", path,
     " decision=", tostring(decision))
   return kong.response.exit(403, { message = "forbidden" })

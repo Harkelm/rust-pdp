@@ -33,6 +33,14 @@ return {
               gt       = 0,
             },
           },
+          {
+            cache_ttl_ms = {
+              type     = "integer",
+              default  = 30000,
+              required = true,
+              gt       = 0,
+            },
+          },
         },
       },
     },

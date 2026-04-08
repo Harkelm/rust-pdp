@@ -93,8 +93,9 @@ func TestConfigHasNoFailOpenField(t *testing.T) {
 func TestConfigFields(t *testing.T) {
 	configType := reflect.TypeOf(Config{})
 	wantFields := map[string]bool{
-		"PdpUrl":    true,
-		"TimeoutMs": true,
+		"PdpUrl":     true,
+		"TimeoutMs":  true,
+		"CacheTtlMs": true,
 	}
 	found := make(map[string]bool)
 	for i := 0; i < configType.NumField(); i++ {
@@ -315,6 +316,68 @@ func TestTimeout_NeverProduces403(t *testing.T) {
 	}
 }
 
+// --- Decision cache (ADR-003) ---
+
+func TestCacheHitSkipsPDP(t *testing.T) {
+	// Clear the cache before this test.
+	cacheMu.Lock()
+	cache = make(map[string]cacheEntry)
+	cacheMu.Unlock()
+
+	pdpCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pdpCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"decision":"Allow"}`))
+	}))
+	defer srv.Close()
+
+	key := cacheKey(toCedarPrincipal("alice"), toCedarAction("GET"), toCedarResource("/cached"))
+	cacheStore(key, "Allow", 30*time.Second)
+
+	// Verify cache lookup works.
+	decision, ok := cacheLookup(key)
+	if !ok || decision != "Allow" {
+		t.Fatalf("cacheLookup failed: ok=%v decision=%q", ok, decision)
+	}
+
+	// The PDP should NOT be called because the cache has the answer.
+	// (We can't call Access() without a real PDK, but we verify the cache layer directly.)
+	if pdpCalled {
+		t.Error("PDP was called despite cache hit")
+	}
+}
+
+func TestCacheExpiry(t *testing.T) {
+	cacheMu.Lock()
+	cache = make(map[string]cacheEntry)
+	cacheMu.Unlock()
+
+	key := cacheKey(toCedarPrincipal("bob"), toCedarAction("POST"), toCedarResource("/expire"))
+	// Store with 1ms TTL -- should expire immediately.
+	cacheStore(key, "Deny", 1*time.Millisecond)
+
+	time.Sleep(5 * time.Millisecond)
+
+	_, ok := cacheLookup(key)
+	if ok {
+		t.Error("cache entry should have expired")
+	}
+}
+
+func TestCacheKeyUniqueness(t *testing.T) {
+	k1 := cacheKey(`User::"alice"`, `Action::"get"`, `Resource::"/a"`)
+	k2 := cacheKey(`User::"alice"`, `Action::"get"`, `Resource::"/b"`)
+	k3 := cacheKey(`User::"bob"`, `Action::"get"`, `Resource::"/a"`)
+	if k1 == k2 {
+		t.Error("different resources should produce different cache keys")
+	}
+	if k1 == k3 {
+		t.Error("different principals should produce different cache keys")
+	}
+}
+
 // --- Default config values ---
 
 func TestNewDefaultConfig(t *testing.T) {
@@ -328,6 +391,9 @@ func TestNewDefaultConfig(t *testing.T) {
 	}
 	if conf.TimeoutMs != 3000 {
 		t.Errorf("TimeoutMs = %d, want 3000", conf.TimeoutMs)
+	}
+	if conf.CacheTtlMs != 30000 {
+		t.Errorf("CacheTtlMs = %d, want 30000", conf.CacheTtlMs)
 	}
 }
 

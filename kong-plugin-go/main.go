@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Kong/go-pdk"
@@ -31,16 +32,54 @@ const Priority = 925
 // Config holds the plugin configuration fields.
 // FailOpen is explicitly absent per ADR-006 P0 security requirement.
 type Config struct {
-	PdpUrl    string `json:"pdp_url"`
-	TimeoutMs int    `json:"timeout_ms"`
+	PdpUrl     string `json:"pdp_url"`
+	TimeoutMs  int    `json:"timeout_ms"`
+	CacheTtlMs int    `json:"cache_ttl_ms"`
 }
 
 // New returns a default Config used as the plugin factory.
 func New() interface{} {
 	return &Config{
-		PdpUrl:    "http://127.0.0.1:8180",
-		TimeoutMs: 3000,
+		PdpUrl:     "http://127.0.0.1:8180",
+		TimeoutMs:  3000,
+		CacheTtlMs: 30000,
 	}
+}
+
+// --- Decision cache (ADR-003 mandatory) ---
+
+type cacheEntry struct {
+	decision string
+	expiry   time.Time
+}
+
+var (
+	cacheMu sync.RWMutex
+	cache   = make(map[string]cacheEntry)
+)
+
+// cacheKey builds a lookup key from the PARC triple.
+func cacheKey(principal, action, resource string) string {
+	return principal + "|" + action + "|" + resource
+}
+
+// cacheLookup returns the cached decision if present and not expired.
+func cacheLookup(key string) (string, bool) {
+	cacheMu.RLock()
+	entry, ok := cache[key]
+	cacheMu.RUnlock()
+	if !ok || time.Now().After(entry.expiry) {
+		return "", false
+	}
+	return entry.decision, true
+}
+
+// cacheStore saves a decision with the given TTL. Only Allow/Deny are cached;
+// errors and transient failures must never be cached.
+func cacheStore(key, decision string, ttl time.Duration) {
+	cacheMu.Lock()
+	cache[key] = cacheEntry{decision: decision, expiry: time.Now().Add(ttl)}
+	cacheMu.Unlock()
 }
 
 // pdpRequest is the JSON body sent to the Cedar PDP.
@@ -129,11 +168,33 @@ func (conf *Config) Access(kong *pdk.PDK) {
 		return
 	}
 
+	// Cache lookup (ADR-003 mandatory plugin-side decision cache).
+	principal := toCedarPrincipal(principalID)
+	action := toCedarAction(method)
+	resource := toCedarResource(path)
+	key := cacheKey(principal, action, resource)
+
+	if decision, ok := cacheLookup(key); ok {
+		if decision == "Allow" {
+			_ = kong.Log.Debug(fmt.Sprintf(
+				"cedar-pdp: cache hit Allow for principal=%s %s %s",
+				principalID, method, path,
+			))
+			return
+		}
+		_ = kong.Log.Info(fmt.Sprintf(
+			"cedar-pdp: cache hit Deny for principal=%s %s %s",
+			principalID, method, path,
+		))
+		kong.Response.Exit(403, body403, nil)
+		return
+	}
+
 	// Build the PDP request payload.
 	payload := pdpRequest{
-		Principal: toCedarPrincipal(principalID),
-		Action:    toCedarAction(method),
-		Resource:  toCedarResource(path),
+		Principal: principal,
+		Action:    action,
+		Resource:  resource,
 		Context:   map[string]any{},
 	}
 
@@ -203,8 +264,16 @@ func (conf *Config) Access(kong *pdk.PDK) {
 		return
 	}
 
-	// Allow -> pass through, return without action.
+	// Compute cache TTL from config.
+	cacheTtlMs := conf.CacheTtlMs
+	if cacheTtlMs <= 0 {
+		cacheTtlMs = 30000
+	}
+	cacheTtl := time.Duration(cacheTtlMs) * time.Millisecond
+
+	// Allow -> cache and pass through.
 	if pdpResp.Decision == "Allow" {
+		cacheStore(key, "Allow", cacheTtl)
 		_ = kong.Log.Debug(fmt.Sprintf(
 			"cedar-pdp: Allow for principal=%s %s %s",
 			principalID, method, path,
@@ -212,7 +281,8 @@ func (conf *Config) Access(kong *pdk.PDK) {
 		return
 	}
 
-	// Deny (or any unrecognised decision) -> 403.
+	// Deny (or any unrecognised decision) -> cache and 403.
+	cacheStore(key, pdpResp.Decision, cacheTtl)
 	_ = kong.Log.Info(fmt.Sprintf(
 		"cedar-pdp: Deny for principal=%s %s %s decision=%s",
 		principalID, method, path, pdpResp.Decision,
