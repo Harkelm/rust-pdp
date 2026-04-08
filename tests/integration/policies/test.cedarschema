@@ -1,0 +1,6 @@
+entity User;
+entity Resource;
+action "get" appliesTo { principal: [User], resource: [Resource] };
+action "post" appliesTo { principal: [User], resource: [Resource] };
+action "put" appliesTo { principal: [User], resource: [Resource] };
+action "delete" appliesTo { principal: [User], resource: [Resource] };

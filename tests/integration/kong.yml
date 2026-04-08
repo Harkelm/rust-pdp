@@ -1,0 +1,56 @@
+_format_version: "3.0"
+
+services:
+  - name: test-upstream
+    url: http://httpbin:80/anything
+    routes:
+      - name: test-route
+        paths:
+          - /api/test
+        strip_path: true
+      - name: timeout-route
+        paths:
+          - /api/timeout-test
+        strip_path: true
+      - name: overload-route
+        paths:
+          - /api/overload-test
+        strip_path: true
+
+consumers:
+  - username: alice
+    id: "00000000-0000-0000-0000-000000000001"
+    keyauth_credentials:
+      - key: alice-key
+  - username: bob
+    id: "00000000-0000-0000-0000-000000000002"
+    keyauth_credentials:
+      - key: bob-key
+
+plugins:
+  # Global key-auth: all routes require an API key
+  - name: key-auth
+    config:
+      key_names:
+        - apikey
+
+  # Cedar PDP on test-route: normal authorization flow
+  - name: cedar-pdp
+    route: test-route
+    config:
+      pdp_url: "http://pdp:8180"
+      timeout_ms: 2000
+
+  # Cedar PDP on timeout-route: points to non-routable IP to force timeout
+  - name: cedar-pdp
+    route: timeout-route
+    config:
+      pdp_url: "http://10.255.255.1:8180"
+      timeout_ms: 1000
+
+  # Cedar PDP on overload-route: points to mock PDP that always returns 503
+  - name: cedar-pdp
+    route: overload-route
+    config:
+      pdp_url: "http://pdp-503:8180"
+      timeout_ms: 2000

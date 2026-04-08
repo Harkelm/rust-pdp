@@ -1,0 +1,14 @@
+FROM rust:1.89-bookworm AS builder
+WORKDIR /app
+COPY pdp/ ./pdp/
+COPY tests/integration/policies/ ./policies/
+WORKDIR /app/pdp
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/pdp/target/release/cedar-pdp /usr/local/bin/cedar-pdp
+COPY --from=builder /app/policies/ /policies/
+ENV CEDAR_POLICY_DIR=/policies
+EXPOSE 8180
+CMD ["cedar-pdp"]
