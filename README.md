@@ -157,6 +157,8 @@ for what remains before production (Phase 1: 13-24 eng-days).
 - Criterion benchmarks (Cedar eval: 5-445us depending on policy count)
 
 **What's not built yet (Phase 1 scope):**
+- AuthZen endpoint (`/access/v1/evaluation`) -- deferred; enables engine-agnostic
+  external access and PDP engine portability (see ADR-002)
 - Tier 2 entity resolution (DB-backed roles/entitlements)
 - Decision audit logging
 - Admin endpoint authentication
