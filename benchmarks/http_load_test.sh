@@ -15,7 +15,9 @@ TIMINGS=$(mktemp)
 
 echo "Running $REQUESTS requests to $PDP_URL/v1/is_authorized..."
 
-REQUEST_BODY='{"principal":"User::\"alice\"","action":"Action::\"get\"","resource":"Resource::\"/api/test\"","context":{}}'
+# Uses the legacy direct-UID path with the test schema (tests/integration/policies/).
+# Start PDP with: cd pdp && CEDAR_POLICY_DIR=../tests/integration/policies cargo run
+REQUEST_BODY='{"principal":"User::\"00000000-0000-0000-0000-000000000001\"","action":"Action::\"get\"","resource":"Resource::\"/api/test\"","context":{}}'
 
 for ((i=1; i<=REQUESTS; i++)); do
     curl -s -o /dev/null -w '%{time_total}\n' \

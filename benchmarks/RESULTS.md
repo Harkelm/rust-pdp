@@ -39,58 +39,70 @@ bound as p95 proxy). Variance was under 1% in all runs.
   This matches Cedar's evaluation model, which evaluates each policy in sequence.
 - At 1000 policies (444 us mean), Cedar is still well under 1 ms in isolation.
 
-## HTTP Round-Trip (PDP Server)
+## HTTP Round-Trip (PDP Server, Measured)
 
-The HTTP load test requires a running PDP server. To run:
+PDP compiled in release mode, serving 2 test policies (tests/integration/policies/).
+1000 sequential requests via curl from localhost. Single-threaded client, measuring
+total round-trip including connection reuse, JSON serialization, and Cedar evaluation.
 
+To reproduce:
+
+```bash
+# Terminal 1:
+cd pdp && CEDAR_POLICY_DIR=../tests/integration/policies cargo run --release
+
+# Terminal 2:
+cd benchmarks && bash http_load_test.sh
 ```
-cd projects/rust-pdp/pdp
-CEDAR_POLICY_DIR=../tests/integration/policies cargo run &
-# wait for startup, then:
-cd ../benchmarks
-bash http_load_test.sh
-```
 
-HTTP results were not captured in this run because the PDP server requires the
-tests/integration/policies schema (which uses the ApiGateway namespace), while the
-benchmark request format uses the legacy direct-UID path with the simpler schema.
-Running the load test against a live server requires manual setup. The script is
-fully functional -- see `benchmarks/http_load_test.sh`.
+| Metric | Value |
+|--------|-------|
+| Min    | 0.115 ms |
+| Avg    | 0.225 ms |
+| P50    | 0.225 ms |
+| P95    | 0.343 ms |
+| P99    | 0.425 ms |
+| Max    | 0.639 ms |
 
-Estimated HTTP round-trip based on typical localhost Axum server behavior:
-- Serialization (JSON parse + serialize): ~50-100 us
-- Tokio async dispatch + HTTP framing: ~100-200 us
-- Cedar evaluation (100 policies, realistic): ~45 us
-- Total estimated P50: ~200-350 us per request (0.2-0.35 ms)
+### Breakdown (estimated from measured components)
+
+- Cedar evaluation (2 policies): ~5 us (from Criterion, in-process)
+- HTTP framing + JSON ser/de + tokio dispatch: ~220 us (P50 total minus eval)
+- The HTTP overhead dominates at low policy counts. At 100+ policies, Cedar
+  evaluation becomes a larger fraction but the total stays well under 1ms.
 
 ## Analysis
 
 ### <5ms per-request budget: MET, with margin
 
 The 5ms per-request budget refers to the overhead added by the PDP on top of
-the normal API request path. Cedar evaluation itself tops out at 444 us for
-1000 policies, leaving 4.5+ ms for HTTP framing, network, and serialization.
+the normal API request path.
+
+**Measured**: HTTP round-trip P99 is 0.425ms with 2 policies. Cedar evaluation
+at 1000 policies adds ~440us. Even in the worst case (1000 policies + HTTP
+overhead), total PDP overhead stays under 1ms on localhost.
 
 At a realistic production policy count of 10-100:
-- Cedar evaluation: 5-45 us
-- HTTP + serialization overhead: ~200-300 us (estimated)
-- Kong plugin callout overhead: ~100-200 us (local loopback)
-- Total estimated end-to-end overhead: ~305-545 us (0.3-0.5 ms)
+- Cedar evaluation: 5-45 us (measured, Criterion)
+- HTTP round-trip overhead: ~225 us P50 (measured, curl localhost)
+- Kong plugin callout overhead: ~100-200 us (local loopback, estimated)
+- Total estimated end-to-end overhead: ~330-470 us (0.33-0.47 ms)
 
-This is 10-16x under the 5ms budget. Even at 1000 policies, the total stays
-well under 1ms for localhost scenarios.
+This is 10-15x under the 5ms budget.
 
-### OPA comparison
+### OPA comparison (literature-based, not measured)
 
-Cedar at 100 policies evaluates in ~45 us. OPA with Rego typically runs 50-200 us
-for equivalent policy sets in benchmark literature, with higher tail latency due to
-Rego's interpreted execution model. At 1000 policies, Cedar evaluates in ~444 us
-while OPA can reach 1-5 ms for complex Rego with large policy sets.
+Cedar at 100 policies evaluates in ~45 us (measured). OPA with Rego typically runs
+50-200 us for equivalent policy sets per published benchmarks, with higher tail
+latency due to Rego's interpreted execution model. At 1000 policies, Cedar evaluates
+in ~444 us (measured) while OPA can reach 1-5 ms for complex Rego with large policy
+sets.
 
-The 42-81x faster claim documented in research (EV or prior analysis) appears
-consistent with the upper range of OPA's policy evaluation time (5ms at 1000
-policies vs Cedar's 0.44ms = ~11x at this scale; published claims likely cover
-more complex policies or OPA's Wasm compilation overhead).
+At 100 policies: Cedar ~45us vs OPA ~50-200us is comparable.
+At 1000 policies: Cedar ~444us vs OPA ~1-5ms is 2-11x faster.
+
+Note: OPA numbers are from published literature, not our own benchmarks. Direct
+comparison requires running both engines against identical policy sets.
 
 ### Scaling conclusion
 

@@ -4,13 +4,43 @@ External Policy Decision Point (PDP) using Cedar for authorization in a Kong API
 gateway deployment. Replaces/augments existing authorization with formally verified,
 sub-millisecond policy evaluation.
 
+## Start Here
+
+If you have 10 minutes, read these three documents in order:
+
+1. **[Risk Analysis and Migration Plan](docs/risk-analysis-and-migration-plan.md)** --
+   executive summary, 8 key risks, 4-phase rollout, effort estimates (20-39 eng-days)
+2. **[ADR-006: Failure Mode](docs/adr/ADR-006_failure-mode.md)** -- the most important
+   security decision (fail-closed, no FailOpen toggle, 503 vs 403 distinction)
+3. **[ADR-005: Entity Resolution](docs/adr/ADR-005_entity-resolution.md)** -- the
+   tiered entity model that drives the entitlement translation strategy
+
+If you have 30 minutes, also read the remaining ADRs and the
+[prerequisites](docs/prerequisites.md). If you want the full deliberation behind
+these decisions, see [docs/roundtable/](docs/roundtable/) (9-panelist architecture
+review, 3 rounds of debate).
+
 ## Architecture
 
-Kong plugin (Go or Lua) -> HTTP sidecar -> Rust PDP (axum + cedar-policy crate).
+```
+                     +-----------+     HTTP/JSON      +-------------+
+  Client request --> | Kong GW   | ---- POST -------> | Rust PDP    |
+                     | (plugin)  | <--- Allow/Deny -- | (cedar-     |
+                     +-----------+                     |  policy 4)  |
+                         |                             +-------------+
+                         v                                   |
+                     Enforce:                           Evaluates:
+                     - Allow -> proxy to upstream       - Cedar policies
+                     - Deny  -> 403 Forbidden           - Entity hierarchy
+                     - Error -> 503 + Retry-After       - Schema validation
+```
 
 The plugin is a thin Policy Enforcement Point (PEP): extract principal ID and
 request context, POST to PDP, enforce the decision. The PDP owns all authorization
 logic: policy evaluation, entity resolution, schema validation.
+
+Two plugin implementations exist (Go and Lua) pending a latency SLA decision.
+See [ADR-001](docs/adr/ADR-001_plugin-language.md) for the trade-off analysis.
 
 ## Project Structure
 
@@ -19,27 +49,70 @@ projects/rust-pdp/
   docs/
     adr/                    # Architecture Decision Records (6 decisions from RT-26)
       ADR-001 through ADR-006
-    prerequisites.md        # 4 P0 blockers that must be resolved before impl
-    risk-analysis-and-migration-plan.md  # (BL-160, not yet written)
+    prerequisites.md        # 4 P0 blockers resolved from roundtable
+    risk-analysis-and-migration-plan.md  # Risks, rollout phases, effort estimates
+    roundtable/             # Full 9-panelist architecture roundtable (RT-26)
+  pdp/                      # Rust PDP service (axum + cedar-policy 4)
+    src/                    #   main.rs, handlers.rs, policy.rs, entities.rs, models.rs
+    tests/                  #   integration.rs (5 tests), validate_policies.rs
+    benches/                #   cedar_eval.rs (Criterion benchmarks)
+  kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
+  kong-plugin-lua/          # Kong Lua plugin (ADR-001 Path A)
+  policies/                 # Production Cedar schema + 6 policy files
+  tests/integration/        # Docker Compose test harness (Kong + PDP + mock services)
+  benchmarks/               # Performance results and load test scripts
   knowledge/
     wiki/                   # Compiled research articles (4 articles)
     raw/archived/           # Raw research deposits
-    sources.toml            # Tracked sources for scout
-  eval-dimensions.toml      # Quality dimensions for /evaluate
-  pdp/                      # (BL-153) Rust PDP service
-  kong-plugin/              # (BL-154) Kong plugin
-  policies/                 # (BL-155) Cedar schema + policy files
-  tests/integration/        # (BL-156) Docker-compose test harness
-  benchmarks/               # (BL-159) Performance benchmarks
+    sources.toml            # Tracked external sources
 ```
 
-Directories below `eval-dimensions.toml` do not exist yet -- they are created by
-their respective backlog items.
+## Running
+
+### Prerequisites
+
+- Rust 1.80+ (tested on 1.92)
+- Docker + Docker Compose (for integration tests)
+- Go 1.21+ (if building the Go plugin)
+
+### Unit Tests
+
+```bash
+cd pdp && cargo test
+# Runs 16 tests: 10 unit (policy + entity), 5 integration, 1 schema validation
+```
+
+### Criterion Benchmarks
+
+```bash
+cd pdp && cargo bench
+# Generates HTML reports in target/criterion/
+# Measures Cedar evaluation latency across policy/entity count matrix
+```
+
+### HTTP Load Test
+
+```bash
+# Terminal 1: start PDP with test policies
+cd pdp && CEDAR_POLICY_DIR=../tests/integration/policies cargo run
+
+# Terminal 2: run load test (1000 requests by default)
+cd benchmarks && bash http_load_test.sh
+```
+
+### Integration Tests (Docker)
+
+```bash
+cd tests/integration
+docker compose up -d --build
+bash run_tests.sh        # 6 tests: allow, deny, no-auth, timeout, 503, default-deny
+bash measure_latency.sh  # Latency distribution with and without PDP
+docker compose down
+```
 
 ## Key Decisions (ADRs)
 
 All architecture decisions were made in roundtable RT-26 (9 panelists, 3 rounds).
-Read these before implementing:
 
 | ADR | Decision | Status |
 |-----|----------|--------|
@@ -52,13 +125,14 @@ Read these before implementing:
 
 ## Prerequisites (P0 Blockers)
 
-Four findings from the roundtable must be addressed in implementation. See
-[prerequisites.md](docs/prerequisites.md) for details:
+Four findings from the roundtable. See [prerequisites.md](docs/prerequisites.md):
 
-1. **No FailOpen config toggle** -- 503+Retry-After for PDP unavailability
-2. **Mandatory pre-eval schema validation** -- prevent Cedar skip-on-error bypass
-3. **PEP/PDP entity trust contract** -- revocable attributes from PDP DB only
-4. **Multi-instance policy consistency** -- deferred until remote deployment
+| ID | Requirement | Status |
+|----|-------------|--------|
+| P0-1 | No FailOpen config toggle | Addressed in code |
+| P0-2 | Pre-eval schema validation | Addressed in code |
+| P0-3 | PEP/PDP entity trust contract | Addressed for Lua path; Go path needs API enforcement |
+| P0-4 | Multi-instance policy consistency | Deferred (sidecar MVP is single-instance) |
 
 ## Research
 
@@ -66,26 +140,25 @@ Four wiki articles compiled from research deposits:
 
 - [Cedar Policy Language](knowledge/wiki/cedar-policy-language.md) -- PARC model, evaluation semantics, Rust crate API
 - [Kong Plugin Architecture](knowledge/wiki/kong-plugin-architecture.md) -- Phase pipeline, external plugin protocol, Go PDK
-- [Rust PDP Service Architecture](knowledge/wiki/rust-pdp-service-architecture.md) -- axum+tonic stack, API design, hot-reload
+- [Rust PDP Service Architecture](knowledge/wiki/rust-pdp-service-architecture.md) -- axum stack, API design, hot-reload
 - [Entitlement Translation](knowledge/wiki/entitlement-translation.md) -- Legacy IAM to Cedar mapping, migration methodology
 
-## Implementation Order
+## Current Status
 
-Tasks are in the backlog (`docs/backlog.toml`) with explicit dependencies:
+All prototype tasks complete. See [risk analysis](docs/risk-analysis-and-migration-plan.md)
+for what remains before production (Phase 1: 13-24 eng-days).
 
-```
-BL-152 Architecture RT (done)
-  |
-  +-- BL-153 Scaffold Rust PDP
-  |     +-- BL-157 Hot-reload (arc-swap)
-  |     +-- BL-158 Entity translation
-  |
-  +-- BL-154 Scaffold Kong plugin
-  |
-  +-- BL-155 Cedar schema design
-  |
-  +-- BL-156 Integration test (needs 153+154+155)
-  |     +-- BL-159 Performance benchmarks
-  |
-  +-- BL-160 Risk analysis + migration plan (needs 152+156)
-```
+**What works now:**
+- Rust PDP with Cedar policy evaluation, schema validation, hot-reload
+- Go and Lua Kong plugins with fail-closed semantics
+- Entity resolution from JWT claims (Tier 1)
+- Integration test harness (Docker Compose, 6 tests passing)
+- Criterion benchmarks (Cedar eval: 5-445us depending on policy count)
+
+**What's not built yet (Phase 1 scope):**
+- Tier 2 entity resolution (DB-backed roles/entitlements)
+- Decision audit logging
+- Admin endpoint authentication
+- Shadow mode enforcement toggle
+- Policy CI/CD pipeline
+- ADR-001 plugin language resolution
