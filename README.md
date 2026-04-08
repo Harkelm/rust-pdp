@@ -39,8 +39,10 @@ The plugin is a thin Policy Enforcement Point (PEP): extract principal ID and
 request context, POST to PDP, enforce the decision. The PDP owns all authorization
 logic: policy evaluation, entity resolution, schema validation.
 
-Two plugin implementations exist (Go and Lua) pending a latency SLA decision.
-See [ADR-001](docs/adr/ADR-001_plugin-language.md) for the trade-off analysis.
+Two plugin implementations exist (Go and Lua). Benchmark data resolved this in
+favor of Lua -- Go IPC overhead collapses throughput 96% at concurrency 100.
+See [ADR-001](docs/adr/ADR-001_plugin-language.md) for the trade-off analysis and
+measured data.
 
 ## Project Structure
 
@@ -51,11 +53,13 @@ projects/rust-pdp/
       ADR-001 through ADR-006
     prerequisites.md        # 4 P0 blockers resolved from roundtable
     risk-analysis-and-migration-plan.md  # Risks, rollout phases, effort estimates
+    agent-reviews/          # Independent code reviews (tech-lead, GPT cross-review)
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration.rs (5 tests), validate_policies.rs
-    benches/                #   cedar_eval.rs (Criterion benchmarks)
+    tests/                  #   integration.rs (12 tests), validate_policies.rs
+    benches/                #   cedar_eval.rs, hierarchy_depth.rs (Criterion benchmarks)
+    examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
   kong-plugin-lua/          # Kong Lua plugin (ADR-001 Path A)
   policies/                 # Production Cedar schema + 6 policy files
@@ -73,14 +77,14 @@ projects/rust-pdp/
 
 - Rust 1.80+ (tested on 1.92)
 - Docker + Docker Compose (for integration tests)
-- Go 1.21+ (if building the Go plugin)
+- Go 1.26+ (if building the Go plugin; go.mod declares 1.26.2)
 - `luarocks install busted` (if running Lua plugin tests)
 
 ### Unit Tests
 
 ```bash
 cd pdp && cargo test
-# Runs 16 tests: 10 unit (policy + entity), 5 integration, 1 schema validation
+# Runs 24 tests: 11 unit (policy + entity), 12 integration, 1 schema validation
 ```
 
 ### Criterion Benchmarks
@@ -117,7 +121,7 @@ All architecture decisions were made in roundtable RT-26 (9 panelists, 3 rounds)
 
 | ADR | Decision | Status |
 |-----|----------|--------|
-| [ADR-001](docs/adr/ADR-001_plugin-language.md) | Go vs Lua plugin | Contested -- needs latency SLA |
+| [ADR-001](docs/adr/ADR-001_plugin-language.md) | Go vs Lua plugin | Resolved -- Lua (benchmark data) |
 | [ADR-002](docs/adr/ADR-002_pdp-protocol.md) | HTTP/JSON for PDP callout | Accepted |
 | [ADR-003](docs/adr/ADR-003_deployment-topology.md) | Sidecar + plugin-side cache | Accepted |
 | [ADR-004](docs/adr/ADR-004_policy-hot-reload.md) | arc-swap tuple swap + Cache wrapper | Accepted |
@@ -168,7 +172,7 @@ for what remains before production (Phase 1: 13-24 eng-days).
 - Admin endpoint authentication
 - Shadow mode enforcement toggle
 - Policy CI/CD pipeline
-- ADR-001 plugin language resolution
+- ADR-001 plugin language resolution -- resolved in favor of Lua (see ADR-001 addendum)
 
 ## Performance Baselines
 
@@ -230,21 +234,27 @@ Measured via Docker stacks (Kong 3.9, production policies, cache disabled).
 
 | Concurrency | Metric | Lua Plugin | Go Plugin | Go/Lua Ratio |
 |-------------|--------|------------|-----------|--------------|
-| 1 | p50 | 0.026 ms | 0.195 ms | 7.5x slower |
-| 1 | RPS | 27,305 | 4,815 | 0.18x |
-| 10 | p50 | 0.093 ms | 0.503 ms | 5.4x slower |
-| 10 | RPS | 86,704 | 13,797 | 0.16x |
-| 50 | p50 | 0.236 ms | 3.959 ms | 16.8x slower |
-| 50 | RPS | 149,202 | 7,103 | 0.05x |
-| 100 | p50 | 0.439 ms | 15.747 ms | 35.9x slower |
-| 100 | RPS | 141,977 | 5,234 | 0.04x |
+| 1 | p50 | 0.025 ms | 0.085 ms | 3.4x slower |
+| 1 | RPS | 30,215 | 8,685 | 0.29x |
+| 10 | p50 | 0.095 ms | 0.427 ms | 4.5x slower |
+| 10 | RPS | 84,774 | 17,254 | 0.20x |
+| 50 | p50 | 0.260 ms | 2.788 ms | 10.7x slower |
+| 50 | RPS | 132,925 | 8,902 | 0.07x |
+| 100 | p50 | 0.417 ms | 11.283 ms | 27.1x slower |
+| 100 | RPS | 141,292 | 6,765 | 0.05x |
 
 **Key finding**: The Go external plugin IPC overhead is far worse than the
-literature estimate (0.3-0.5ms). At concurrency 50, Go plugin adds ~3.7ms p50
-vs Lua's 0.1ms -- a 37x overhead, not 3-5x. At concurrency 100, Go throughput
-collapses to 5K RPS vs Lua's 142K RPS (96% reduction).
+literature estimate (0.3-0.5ms). At concurrency 50, Go plugin adds ~2.5ms p50
+vs Lua's 0.3ms -- a 10.7x overhead, not 3-5x. At concurrency 100, Go throughput
+collapses to 6.8K RPS vs Lua's 141K RPS (95% reduction).
 
-**Direct PDP** (bypass Kong) sustains 425K RPS at concurrency 100, confirming
+**Root cause**: Kong's external plugin protocol makes 3-5 PDK calls per request
+(GetConsumer, GetMethod, GetPath, Response.Exit), each a separate MessagePack-
+serialized Unix socket round-trip. At high concurrency the socket queue saturates.
+Lua plugins make the same PDK calls as in-process Lua/C function calls with zero
+serialization or IPC.
+
+**Direct PDP** (bypass Kong) sustains 430K RPS at concurrency 100, confirming
 that Kong + plugin layer is the bottleneck, not Cedar evaluation.
 
 **Implication for ADR-001**: The Go external plugin IPC tax is not "0.3-0.5ms

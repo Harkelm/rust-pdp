@@ -1,8 +1,9 @@
 # ADR-001: Kong Plugin Language (Go vs Lua)
 
-**Status**: Contested  
+**Status**: Resolved -- Lua (Path A)  
 **Date**: 2026-04-08  
-**Source**: Architecture roundtable RT-26, 9 panelists, 3 deliberation rounds
+**Source**: Architecture roundtable RT-26, 9 panelists, 3 deliberation rounds  
+**Resolution**: Benchmark data (2026-04-08) invalidated the "0.3-0.5ms fixed IPC" assumption. See Addendum below.
 
 ## Context
 
@@ -65,3 +66,32 @@ development velocity is the primary constraint and the SLA is comfortable (e.g.,
   structurally -- the plugin cannot inject entity data
 - If Path B is chosen, the PDP API must enforce entity trust boundaries
   independently (see prerequisites.md, P0-3)
+
+## Addendum: Benchmark Resolution (2026-04-08)
+
+Measured Go vs Lua plugin performance under identical conditions (Kong 3.9,
+Docker, production policies, cache disabled). Full data in `benchmarks/RESULTS.md`.
+
+The Go external plugin IPC overhead is **not** a fixed 0.3-0.5ms cost. It grows
+non-linearly with concurrency:
+
+| Concurrency | Lua p50 | Go p50 | Go/Lua Ratio | Go RPS | Lua RPS |
+|-------------|---------|--------|--------------|--------|---------|
+| 1 | 0.025 ms | 0.085 ms | 3.4x | 8,685 | 30,215 |
+| 10 | 0.095 ms | 0.427 ms | 4.5x | 17,254 | 84,774 |
+| 50 | 0.260 ms | 2.788 ms | 10.7x | 8,902 | 132,925 |
+| 100 | 0.417 ms | 11.283 ms | 27.1x | 6,765 | 141,292 |
+
+Raw results: `benchmarks/results/20260408T134526_*_{go,lua}_{kong,pdp}_c*.json`
+
+At concurrency 100, Go throughput collapses to 4.8% of Lua throughput (6.8K vs
+141K RPS). The external plugin Unix socket protocol creates a serialization
+bottleneck that worsens with concurrent connections. Each PDK call (GetConsumer,
+GetMethod, GetPath, Response.Exit) is a separate MessagePack-serialized round-trip
+over the Unix socket -- 3-5 round-trips per authorization request.
+
+**Conclusion**: Path A (Lua) is the correct choice for any deployment expecting
+concurrent authorization requests. Go is viable only with aggressive decision
+caching (90%+ hit rate) that avoids the IPC path entirely, but the cache stampede
+risk (see `benchmarks/stampede_sim.sh`) makes this fragile. Recommend Lua for
+production, retain Go plugin as a reference/testing implementation.

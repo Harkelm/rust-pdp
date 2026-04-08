@@ -246,32 +246,41 @@ and partly due to CPU contention during policy parsing.
 ### Go vs Lua Plugin Comparison (Measured 2026-04-08)
 
 Docker stacks, Kong 3.9, production policies, cache disabled (TTL=1ms).
+Raw JSON results in `results/20260408T134526_*`. To reproduce: `bash go_vs_lua.sh`.
 
 **Direct PDP (inside Docker, bypass Kong):**
 
 | Concurrency | RPS (Lua stack) | RPS (Go stack) |
 |-------------|-----------------|----------------|
-| 1 | 52,235 | 16,055 |
-| 10 | 199,219 | 73,905 |
-| 50 | 344,214 | 91,169 |
-| 100 | 425,000 | 71,027 |
+| 1 | 52,508 | 52,121 |
+| 10 | 200,016 | 197,921 |
+| 50 | 350,792 | 307,117 |
+| 100 | 429,909 | 363,627 |
 
-Note: Direct PDP numbers differ between stacks due to Docker resource contention
-with Kong. The Go stack's Kong (with external plugin server) consumes more CPU.
+Direct PDP numbers are comparable between stacks at low concurrency, confirming
+the PDP itself performs identically. At c=50+, the Go stack shows ~12-15% lower
+PDP throughput due to CPU contention from the Go plugin server process.
 
 **Through Kong:**
 
 | Concurrency | Lua RPS | Lua p50 | Go RPS | Go p50 | Go/Lua RPS |
 |-------------|---------|---------|--------|--------|------------|
-| 1 | 27,305 | 0.026 ms | 4,815 | 0.195 ms | 0.18x |
-| 10 | 86,704 | 0.093 ms | 13,797 | 0.503 ms | 0.16x |
-| 50 | 149,202 | 0.236 ms | 7,103 | 3.959 ms | 0.05x |
-| 100 | 141,977 | 0.439 ms | 5,234 | 15.747 ms | 0.04x |
+| 1 | 30,215 | 0.025 ms | 8,685 | 0.085 ms | 0.29x |
+| 10 | 84,774 | 0.095 ms | 17,254 | 0.427 ms | 0.20x |
+| 50 | 132,925 | 0.260 ms | 8,902 | 2.788 ms | 0.07x |
+| 100 | 141,292 | 0.417 ms | 6,765 | 11.283 ms | 0.05x |
 
 The Go plugin IPC overhead grows non-linearly with concurrency. At c=100,
-Go throughput is 96% lower than Lua. This is far worse than the literature
-estimate of -25%. The external plugin protocol creates a per-request
+Go throughput is 95% lower than Lua (6.8K vs 141K RPS). Go p50 latency at
+c=100 (11.3ms) exceeds the 5ms p99 budget alone. This is far worse than the
+literature estimate of -25%. The external plugin protocol creates a per-request
 serialization bottleneck that collapses under concurrent load.
+
+**Root cause**: Kong's Go external plugin protocol makes 3-5 PDK calls per
+request (GetConsumer, GetMethod, GetPath, Response.Exit), each a separate
+MessagePack-serialized Unix socket round-trip. At c=100, the socket queue
+saturates and goroutines pile up waiting for IPC. Lua plugins make these
+same PDK calls as in-process Lua/C function calls with zero serialization.
 
 ### Batch Endpoint Stress Test (Measured 2026-04-08)
 

@@ -2,5 +2,8 @@
 /pdp/target/
 /kong-plugin-go/cedar-authz-plugin
 
+# Handoff files (ephemeral, not committed)
+.handoff.md
+
 # OS files
 .DS_Store
