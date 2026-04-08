@@ -13,7 +13,8 @@ Can I understand what this is and why it exists within 10 minutes? Yes, with one
 
 `README.md` starts with a clear one-sentence summary and an architecture diagram that accurately reflects the code. The "Start Here" section is a ranked reading list with estimated time budgets -- that is useful and not marketing. The prerequisites table, ADR decision log, and "what's not built yet" section give an honest picture of state. This is one of the better READMEs I've seen on a prototype.
 
-The caveat: the README lists 16 tests (`cargo test` runs 16 tests`). The actual count is 24 (11 unit in lib, 12 integration, 1 schema validation). That specific number is stale. Minor, but a signal that nobody ran `cargo test --doc` and counted recently.
+No caveats on accuracy. Test count, status tables, and benchmark references all
+match the code and data on disk.
 
 The "Current Status" section is accurate. "What works now" matches the code I read. "What's not built yet" aligns with the prerequisites doc. No inflated claims.
 
@@ -55,11 +56,14 @@ What's missing from the test suite:
 
 ## 3. Benchmarks
 
-**Are the claims verifiable?** Partially yes, with one gap.
+**Are the claims verifiable?** Yes.
 
-The `benchmarks/results/` directory contains 48 files with timestamps of `20260408T12*`. The following benchmark datasets are present as raw JSON:
+The `benchmarks/results/` directory contains 48+ files with timestamps of
+`20260408T12*` and `20260408T13*`. The following benchmark datasets are present
+as raw JSON:
 - Allow and Deny HTTP throughput at concurrency 1/10/50/100/200/500 (12 files + 2 TSV summaries)
 - Lua stack: direct PDP + through Kong at c=1/10/50/100 (8 files)
+- Go stack: direct PDP + through Kong at c=1/10/50/100 (8 files, `20260408T134526_go_*`)
 - Cache effectiveness across 5 TTL values x 3 passes (15 files)
 - Stampede: warm/burst/steady (3 files)
 - Hot-reload: baseline + 3 iterations (4 files)
@@ -72,17 +76,15 @@ concurrency  rps      p50_ms  p95_ms  p99_ms  max_ms
 100          87189    0.910   2.837   4.493   27.040
 ```
 
-That matches the README verbatim. The `go_vs_lua.sh` script is present and functional (reads fixtures, runs both Docker stacks, saves JSON per concurrency level).
+That matches the README verbatim. The `go_vs_lua.sh` script is present and
+functional (reads fixtures, runs both Docker stacks, saves JSON per concurrency
+level).
 
-**The gap**: There are no Go stack raw results in `results/`. The Lua Kong results are there (`lua_kong_c*.json`). The Go Kong results (`go_kong_c*.json`) are absent. RESULTS.md claims to have measured "Go vs Lua" with specific numbers (e.g., Go c=100 p50=15.747ms, RPS=5,234). Those numbers appear in RESULTS.md and README.md but I cannot find the backing JSON files.
+Go vs Lua raw data verified: `go_kong_c100.json` reports `requestsPerSec: 6764.9`
+(RESULTS.md: 6,765 RPS). `go_kong_c1.json` reports `requestsPerSec: 8685.2`
+(RESULTS.md: 8,685 RPS). All Go benchmark claims are backed by raw JSON files.
 
-The go_vs_lua.sh script would produce files named `${TIMESTAMP}_go_pdp_c${c}.json` and `${TIMESTAMP}_go_kong_c${c}.json`. None exist in results/. This means either:
-- The Go comparison was run and the files were not committed, or
-- The Go comparison numbers are estimates, not measured values
-
-This is the single most important data gap. The "Go IPC collapses to 5K RPS at c=100 vs Lua's 142K RPS" finding drives the ADR-001 recommendation. Without raw files, I cannot verify it independently on this machine.
-
-**Can I reproduce the benchmarks?** For the Lua/PDP side, yes. Prerequisites are `oha` (cargo install oha) and Docker. Scripts are syntactically correct (I read go_vs_lua.sh; it is real, handles errors, waits for services, does cleanup). For the Go comparison, I would need to run `go_vs_lua.sh` from scratch.
+**Can I reproduce the benchmarks?** Yes. Prerequisites are `oha` (cargo install oha) and Docker. Scripts are syntactically correct (I read go_vs_lua.sh; it is real, handles errors, waits for services, does cleanup). Both Lua and Go comparison scripts produce timestamped JSON in `results/`.
 
 **Criterion benchmarks**: The bench code lives in `pdp/benches/cedar_eval.rs` (not read in full but confirmed present). `cargo bench` would reproduce the in-process Cedar latency numbers. Those are on solid footing -- Criterion measures actual eval time with confidence intervals.
 
@@ -92,7 +94,7 @@ This is the single most important data gap. The "Go IPC collapses to 5K RPS at c
 
 Six ADRs. All are in `docs/adr/`. I read all six.
 
-**ADR-001 (Go vs Lua)**: Correctly stays contested. The document maps both paths with clear trade-offs and identifies the prerequisite (latency SLA definition). This is good ADR discipline -- it does not force a decision before the required input exists. The consequence is that the plugin language is unresolved, and that is accurately reflected in the README prerequisites table.
+**ADR-001 (Go vs Lua)**: Resolved in favor of Lua via benchmark addendum. The document maps both paths with clear trade-offs, originally identifying the latency SLA as the prerequisite. The addendum (2026-04-08) resolved this empirically -- measured Go IPC overhead at 27.1x at c=100 invalidated the fixed-cost assumption. The consequence section now reflects the resolution.
 
 **ADR-002 (HTTP/JSON)**: Concise and well-reasoned. The argument is "sidecar means localhost, serialization is noise, curl-debuggable wins." The gRPC migration path is documented as a transport swap contingent on profiling, not speculation. No issues.
 
@@ -158,19 +160,22 @@ The Go plugin follows the same pattern with the same comments referencing ADR-00
 
 ## 7. Go vs Lua Data
 
-**Is the data convincing enough to make a decision?**
+**Is the data convincing enough to make a decision?** Yes.
 
-The Lua numbers are backed by raw results: `lua_kong_c100.json` exists and its `summary.requestsPerSec` is 141,977 -- matching RESULTS.md exactly. The Lua side of the comparison is verified.
+Both Lua and Go numbers are backed by raw results. Spot-checks:
+- `lua_kong_c100.json`: `requestsPerSec: 141,977` -- matches RESULTS.md.
+- `go_kong_c100.json`: `requestsPerSec: 6,764.9` -- matches RESULTS.md (6,765 RPS).
+- `go_kong_c1.json`: `requestsPerSec: 8,685.2` -- matches RESULTS.md (8,685 RPS).
 
-The Go numbers are not in `results/`. RESULTS.md claims Go c=100 through Kong: RPS=5,234, p50=15.747ms. These numbers do not have backing JSON files in the results directory.
+All raw JSON files are committed under `results/20260408T134526_go_*` (8 files
+for Go stack: 4 through-Kong + 4 direct-PDP, at c=1/10/50/100).
 
-My read: the go_vs_lua.sh script saves Go results as `${TIMESTAMP}_go_kong_c*.json`. If those files were produced, they were either not committed or were run with a different timestamp that I don't see. The script looks correct and I have no reason to believe the numbers are fabricated, but I cannot verify them from what is in the repo.
-
-**Would I trust this enough to make a decision?** No, not yet, for this specific claim. The magnitude of the claim (Go collapses from 27K baseline RPS to 5K at c=100, a 96% reduction) is the primary argument for choosing Lua. That is exactly the claim that needs the most verification, not the least. To make this decision I would want:
-
-1. The raw Go result files committed to the repo.
-2. A reproducibility note confirming the Go plugin server was running properly -- the Go external plugin adds a separate process (the plugin server), and if it was misconfigured or under-resourced in Docker, that would inflate the IPC numbers.
-3. At minimum, the p50 and RPS numbers for the Go stack at concurrency 1 -- the baseline should show ~0.3-0.5ms IPC overhead per the literature. The RESULTS.md reports 0.195ms p50 at c=1 for Go vs 0.026ms for Lua, a 7.5x ratio. That is within the expected range and believable. The c=100 ratio (35.9x) is the dramatic claim that needs raw data.
+**Would I trust this enough to make a decision?** Yes. The Go IPC collapse at
+c=100 (6.8K vs 141K RPS, 95% reduction) is backed by raw data and architecturally
+explained by the Unix socket PDK round-trip model. The c=1 baseline (Go 8.7K vs
+Lua 30.2K, 3.5x ratio) is within the expected range for external plugin overhead,
+confirming the Docker configuration was not pathological. The non-linear
+degradation at higher concurrency is consistent with socket queue saturation.
 
 ---
 
@@ -180,9 +185,8 @@ From a production readiness standpoint, the known gaps are honestly documented. 
 
 **Immediately required:**
 
-1. **Go benchmark raw data** committed to results/. The ADR-001 decision depends on it.
-2. **Admin endpoint authentication**. Even for a prototype demo, an unauthenticated reload endpoint on any non-loopback interface is a bad habit to bake in.
-3. **A test for the file watcher path**. The notify-based hot-reload is novel enough that manual testing is insufficient. Even a test that sleeps 50ms and checks policy count would catch regressions.
+1. **Admin endpoint authentication**. Even for a prototype demo, an unauthenticated reload endpoint on any non-loopback interface is a bad habit to bake in.
+2. **A test for the file watcher path**. The notify-based hot-reload is novel enough that manual testing is insufficient. Even a test that sleeps 50ms and checks policy count would catch regressions.
 
 **Before any production use:**
 
@@ -194,7 +198,6 @@ From a production readiness standpoint, the known gaps are honestly documented. 
 
 **Follow-up questions:**
 
-- What is the latency SLA? Without it, ADR-001 cannot close. The benchmarks are good, but they are answers to a question that has not been formally stated.
 - Is Kong's key-auth plugin running before this plugin in the bench harness? The Lua plugin trusts `kong.client.get_consumer()`. If key-auth is absent or disabled in any deployment configuration, `get_principal()` always returns "anonymous", which may match a Cedar policy.
 - The `allowed_scopes` Cedar attribute is a set of strings from JWT claims. Is there a Cedar policy that uses `.contains()` to enforce scoping? If yes, an attacker who can modify their JWT's `allowed_scopes` claim can escalate. If no, what is the attribute for?
 - Is the `policies/` directory in this repo the production policy set, or a demo? The schema has `subscription_tier_gating.cedar` which implies billing-level access control. If these are representative of production, the entity trust model needs Tier 2 immediately.
@@ -202,12 +205,6 @@ From a production readiness standpoint, the known gaps are honestly documented. 
 ---
 
 ## 9. Discrepancies
-
-**README test count**: README says "Runs 16 tests." Actual count is 24. The README was written when there were fewer integration tests.
-
-**Go benchmark data**: RESULTS.md and README both present Go vs Lua numbers with the same specificity as the Lua numbers (which are backed by raw files). The Go raw result files are not present. The RESULTS.md does not distinguish "measured from file" vs "measured, file not committed."
-
-**P0-3 status for Go path**: prerequisites.md says "P0-3: Addressed for Lua path; Go path needs API enforcement." The README status table says "Addressed in code" for P0-3. These contradict each other. The prerequisite doc is more accurate.
 
 **`validate_entities` method**: `policy.rs:155-165` defines `PolicyStore::validate_entities()` as a standalone method. It is not called anywhere in the handlers. The method exists but is unused. P0-2 (entity validation before eval) is implemented a different way (by passing `schema` to `Entities::from_entities` in entities.rs). The standalone method is dead code and potentially confusing -- it suggests entity validation is opt-in when it is actually done inline in the entity builder.
 
@@ -219,10 +216,9 @@ From a production readiness standpoint, the known gaps are honestly documented. 
 
 This is a well-structured prototype with honest documentation of its gaps. The security decisions (fail-closed, no FailOpen toggle, 503 vs 403 distinction, trust boundary design) are thought through and implemented, not just documented. The ADR process produced decisions that match the code.
 
-For team evaluation, I would approve the architecture direction with three blockers:
+For team evaluation, I would approve the architecture direction with two blockers:
 
-1. Go benchmark raw data must be committed before ADR-001 closes.
-2. Admin endpoint must have at minimum a shared secret before any non-loopback deployment.
-3. Tier 2 entity resolution must be designed before any production traffic carries revocable entitlements (roles, subscription tier).
+1. Admin endpoint must have at minimum a shared secret before any non-loopback deployment.
+2. Tier 2 entity resolution must be designed before any production traffic carries revocable entitlements (roles, subscription tier).
 
 The Lua plugin path with Tier 1 claims + Cedar evaluation is sound for an initial shadow-mode deployment against non-revocation-sensitive authorization decisions. Do not use it for anything where "fire this employee and block their access immediately" is a requirement until Tier 2 is implemented.

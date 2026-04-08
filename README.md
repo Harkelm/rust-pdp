@@ -53,7 +53,7 @@ projects/rust-pdp/
       ADR-001 through ADR-006
     prerequisites.md        # 4 P0 blockers resolved from roundtable
     risk-analysis-and-migration-plan.md  # Risks, rollout phases, effort estimates
-    agent-reviews/          # Independent code reviews (tech-lead, GPT cross-review)
+    agent-reviews/          # Independent code reviews (tech-lead, field-agent)
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, policy.rs, entities.rs, models.rs
@@ -172,7 +172,7 @@ for what remains before production (Phase 1: 13-24 eng-days).
 - Admin endpoint authentication
 - Shadow mode enforcement toggle
 - Policy CI/CD pipeline
-- ADR-001 plugin language resolution -- resolved in favor of Lua (see ADR-001 addendum)
+
 
 ## Performance Baselines
 

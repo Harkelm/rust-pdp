@@ -61,11 +61,13 @@ development velocity is the primary constraint and the SLA is comfortable (e.g.,
 
 ## Consequences
 
-- Downstream implementation (scaffold task) must wait for latency SLA definition
-- If Path A is chosen, the entity trust boundary (ADR-005) is resolved
-  structurally -- the plugin cannot inject entity data
-- If Path B is chosen, the PDP API must enforce entity trust boundaries
-  independently (see prerequisites.md, P0-3)
+- Path A (Lua) selected: the entity trust boundary (ADR-005) is resolved
+  structurally -- the plugin sends only principal ID + request context, no
+  entities array injection surface
+- Go plugin retained as reference/testing implementation, not for production
+  concurrent deployments
+- Latency SLA question is resolved empirically -- benchmark data shows Lua
+  meets <5ms p99 at concurrency 100, Go does not
 
 ## Addendum: Benchmark Resolution (2026-04-08)
 
