@@ -96,19 +96,13 @@ type pdpResponse struct {
 	Diagnostics interface{} `json:"diagnostics,omitempty"`
 }
 
-// getPrincipal resolves the caller identity in priority order:
-//  1. Kong consumer set by upstream auth plugin
-//  2. X-Consumer-ID request header
-//  3. Literal "anonymous"
+// getPrincipal resolves the caller identity from Kong's authenticated consumer.
+// Only kong.Client.GetConsumer() is trusted (set by auth plugins).
+// X-Consumer-ID header is NOT used -- it is client-supplied and spoofable (BL-165).
 func getPrincipal(kong *pdk.PDK) (string, error) {
 	consumer, err := kong.Client.GetConsumer()
 	if err == nil && consumer.Id != "" {
 		return consumer.Id, nil
-	}
-
-	headerID, err := kong.Request.GetHeader("X-Consumer-ID")
-	if err == nil && headerID != "" {
-		return headerID, nil
 	}
 
 	return "anonymous", nil

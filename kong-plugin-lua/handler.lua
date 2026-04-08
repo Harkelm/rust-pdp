@@ -44,20 +44,13 @@ local function cache_store(key, decision, ttl_seconds)
   }
 end
 
--- Extract the principal identifier from the Kong request context.
--- Resolution order:
---   1. Kong consumer (set by authentication plugins upstream)
---   2. X-Consumer-ID request header
---   3. Literal "anonymous"
+-- Extract the principal identifier from Kong's authenticated consumer.
+-- Only kong.client.get_consumer() is trusted (set by auth plugins).
+-- X-Consumer-ID header is NOT used -- it is client-supplied and spoofable (BL-165).
 local function get_principal()
   local consumer = kong.client.get_consumer()
   if consumer and consumer.id then
     return consumer.id
-  end
-
-  local header_id = kong.request.get_header("X-Consumer-ID")
-  if header_id and header_id ~= "" then
-    return header_id
   end
 
   return "anonymous"

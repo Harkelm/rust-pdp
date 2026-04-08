@@ -162,10 +162,10 @@ describe("cedar-pdp handler", function()
 
       local cjson = require("cjson.safe")
       local body = cjson.decode(last_request.opts.body)
-      assert.equals('User::"consumer-uuid-1234"', body.principal)
+      assert.equals('ApiGateway::User::"consumer-uuid-1234"', body.principal)
     end)
 
-    it("falls back to X-Consumer-ID header when no Kong consumer", function()
+    it("ignores X-Consumer-ID header (BL-165: spoofable)", function()
       kong_mock.client.get_consumer = function() return nil end
       kong_mock.request.get_header = function(name)
         if name == "X-Consumer-ID" then return "header-consumer-id" end
@@ -177,10 +177,11 @@ describe("cedar-pdp handler", function()
 
       local cjson = require("cjson.safe")
       local body = cjson.decode(last_request.opts.body)
-      assert.equals('User::"header-consumer-id"', body.principal)
+      -- Must NOT use header value; must fall through to anonymous.
+      assert.equals('ApiGateway::User::"anonymous"', body.principal)
     end)
 
-    it("falls back to anonymous when no consumer and no header", function()
+    it("falls back to anonymous when no consumer", function()
       kong_mock.client.get_consumer = function() return nil end
       kong_mock.request.get_header  = function(_) return nil end
       http_response = { status = 200, body = '{"decision":"Allow"}' }
@@ -189,10 +190,10 @@ describe("cedar-pdp handler", function()
 
       local cjson = require("cjson.safe")
       local body = cjson.decode(last_request.opts.body)
-      assert.equals('User::"anonymous"', body.principal)
+      assert.equals('ApiGateway::User::"anonymous"', body.principal)
     end)
 
-    it("lowercases the HTTP method into the Cedar action", function()
+    it("maps HTTP method to Cedar action name", function()
       kong_mock.request.get_method = function() return "POST" end
       http_response = { status = 200, body = '{"decision":"Allow"}' }
 
@@ -200,7 +201,7 @@ describe("cedar-pdp handler", function()
 
       local cjson = require("cjson.safe")
       local body = cjson.decode(last_request.opts.body)
-      assert.equals('Action::"post"', body.action)
+      assert.equals('ApiGateway::Action::"write"', body.action)
     end)
 
     it("uses the request path as the Cedar resource", function()
@@ -211,7 +212,15 @@ describe("cedar-pdp handler", function()
 
       local cjson = require("cjson.safe")
       local body = cjson.decode(last_request.opts.body)
-      assert.equals('Resource::"/api/v1/users"', body.resource)
+      assert.equals('ApiGateway::ApiResource::"/api/v1/users"', body.resource)
+    end)
+
+    it("rejects unknown HTTP methods with 403 (BL-164)", function()
+      kong_mock.request.get_method = function() return "TRACE" end
+
+      handler:access(default_conf)
+
+      assert.equals(403, last_exit.status)
     end)
 
     it("posts to the correct PDP endpoint", function()
