@@ -107,7 +107,7 @@ All responses include an `X-Request-Id` header (propagated from request or gener
 
 ```bash
 cd pdp && cargo test
-# Runs 96 tests: 11 unit (policy + entity), 84 integration, 1 schema validation
+# Runs 103 tests: 11 unit, 85 integration, 7 stress
 ```
 
 ### Criterion Benchmarks
