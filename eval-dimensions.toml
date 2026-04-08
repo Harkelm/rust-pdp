@@ -1,0 +1,50 @@
+# Evaluation dimensions for the Rust PDP project.
+# Used by /evaluate to score work products in this domain.
+
+[[dimensions]]
+name = "Correctness"
+type = "code"
+weight = 1.0
+description = "Policy evaluation produces correct allow/deny decisions. Cedar semantics are faithfully implemented. Edge cases (missing attributes, partial context) handled correctly."
+
+[[dimensions]]
+name = "Performance"
+type = "code"
+weight = 1.0
+description = "Request latency overhead from PDP call is within acceptable bounds. Policy evaluation, network round-trip, and serialization costs are measured and optimized."
+
+[[dimensions]]
+name = "Security"
+type = "code"
+weight = 1.0
+description = "Default-deny enforcement. No policy bypass paths. Secure communication between Kong and PDP. Input validation on policy context. No information leakage in error responses."
+
+[[dimensions]]
+name = "Integration Fidelity"
+type = "code"
+weight = 0.8
+description = "Kong plugin correctly extracts request context (headers, path, method, JWT claims). PDP receives well-formed authorization requests. Allow/deny maps to correct HTTP responses."
+
+[[dimensions]]
+name = "Entitlement Translation"
+type = "code"
+weight = 0.8
+description = "Existing customer entitlements accurately mapped to Cedar entity/policy model. No authorization regressions during migration. Translation is auditable and reversible."
+
+[[dimensions]]
+name = "Clarity"
+type = "document"
+weight = 0.6
+description = "Architecture decisions are explained with rationale. Cedar policy examples are readable. Request flow diagrams are accurate."
+
+[[dimensions]]
+name = "Actionability"
+type = "document"
+weight = 0.6
+description = "Findings lead to concrete next steps. Risks have mitigations. Performance claims have measurement methodology."
+
+[[dimensions]]
+name = "Completeness"
+type = "document"
+weight = 0.6
+description = "All four focus areas covered: architecture, request/context model, performance implications, key risks. No critical gaps in analysis."

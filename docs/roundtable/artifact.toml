@@ -1,0 +1,14 @@
+schema_version = 1
+
+id = "RT-26"
+type = "roundtable"
+date = "2026-04-08"
+slug = "cedar-pdp-kong-architecture"
+subject = "Architecture decision: Cedar PDP + Kong Gateway integration -- 6 tension points"
+tags = ["rust-pdp", "cedar", "kong", "architecture", "authorization", "security"]
+panel = ["lamport", "cantrill", "fowler", "hightower", "schneier", "hashimoto", "antirez", "dhh", "agi-accelerationist"]
+tension_pairs = ["hightower vs lamport", "schneier vs hightower", "dhh vs cantrill"]
+session_id = "workflow-20260408T133436283-39c8"
+panel_preset = "infrastructure"
+project = "rust-pdp"
+parent_task = "BL-152"

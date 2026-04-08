@@ -1,0 +1,65 @@
+# OSINT sources for the Rust PDP project.
+# Scout checks these on schedule and deposits findings to knowledge/raw/.
+
+[[sources]]
+id = "cedar-repo"
+name = "Cedar Policy Language Repository"
+type = "github-repo"
+url = "https://github.com/cedar-policy/cedar"
+check_interval_hours = 24
+tags = ["cedar", "policy", "core"]
+description = "Core Cedar policy language implementation in Rust. Track releases, API changes, and performance work."
+
+[[sources]]
+id = "cedar-docs"
+name = "Cedar Documentation"
+type = "web"
+url = "https://docs.cedarpolicy.com"
+check_interval_hours = 168
+tags = ["cedar", "docs", "reference"]
+description = "Official Cedar policy language documentation. Schema, syntax, evaluation semantics."
+
+[[sources]]
+id = "cedar-agent"
+name = "Cedar Agent (Sidecar PDP)"
+type = "github-repo"
+url = "https://github.com/cedar-policy/cedar-examples"
+check_interval_hours = 72
+tags = ["cedar", "agent", "examples", "deployment"]
+description = "Cedar examples including agent/sidecar patterns. Reference architectures."
+
+[[sources]]
+id = "kong-plugin-dev"
+name = "Kong Plugin Development Guide"
+type = "web"
+url = "https://docs.konghq.com/gateway/latest/plugin-development/"
+check_interval_hours = 168
+tags = ["kong", "plugin", "development"]
+description = "Kong plugin development documentation. Lua/Go plugin SDK, request lifecycle, PDK."
+
+[[sources]]
+id = "kong-ext-plugin"
+name = "Kong External Plugin Protocol"
+type = "web"
+url = "https://docs.konghq.com/gateway/latest/plugin-development/pluginserver/external-plugins/"
+check_interval_hours = 168
+tags = ["kong", "external-plugin", "grpc", "protocol"]
+description = "Kong external plugin server protocol. How to write plugins in non-Lua languages via gRPC."
+
+[[sources]]
+id = "avp-cedar"
+name = "Amazon Verified Permissions"
+type = "web"
+url = "https://docs.aws.amazon.com/verifiedpermissions/latest/userguide/what-is-avp.html"
+check_interval_hours = 336
+tags = ["cedar", "aws", "avp", "reference-impl"]
+description = "AWS Verified Permissions -- managed Cedar service. Reference for production Cedar patterns."
+
+[[sources]]
+id = "opa-comparison"
+name = "OPA vs Cedar comparison context"
+type = "github-repo"
+url = "https://github.com/open-policy-agent/opa"
+check_interval_hours = 336
+tags = ["opa", "comparison", "policy"]
+description = "Open Policy Agent for comparison context. Understand what Cedar does differently."

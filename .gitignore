@@ -1,0 +1,6 @@
+# Build artifacts
+/pdp/target/
+/kong-plugin-go/cedar-authz-plugin
+
+# OS files
+.DS_Store

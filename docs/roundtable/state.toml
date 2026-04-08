@@ -1,0 +1,232 @@
+schema_version = 1
+
+review_status = "open"
+verdict = "Cedar engine is correct choice; surrounding architecture has 4 P0 security/correctness gaps requiring resolution before implementation"
+p0_count = 4
+p1_count = 8
+
+# --- P0 Findings ---
+
+[[findings]]
+id = 1
+severity = "P0"
+status = "defended"
+title = "FailOpen bool is a security trapdoor, not a config option"
+raised_by = ["schneier", "cantrill", "fowler", "hightower", "dhh", "hashimoto", "lamport", "antirez", "agi-accelerationist"]
+description = "kong-plugin-architecture.md:68 -- FailOpen bool in plugin Config struct allows silent authorization bypass with no audit trail, no alerting, no time bound, no per-route vs global distinction. 9/9 panelists flagged independently."
+
+[[findings]]
+id = 2
+severity = "P0"
+status = "defended"
+title = "Entity trust boundary is enforcement gap, not documentation gap"
+raised_by = ["schneier", "cantrill", "fowler", "hashimoto"]
+description = "rust-pdp-service-architecture.md:43-61 accepts entities array unconditionally. Line 157 warning is aspirational prose. JWT-to-Cedar Cedarling pattern (entitlement-translation.md:129-148) constructs role memberships from JWT claims. Role membership is a revocable security-critical attribute. Combined with skip-on-error (F3), PEP can omit attributes to bypass forbid rules."
+
+[[findings]]
+id = 3
+severity = "P0"
+status = "defended"
+title = "Cedar skip-on-error semantics create forbid policy bypass vector"
+raised_by = ["schneier"]
+challenged_by = []
+description = "cedar-policy-language.md:50-51 -- policies that error during evaluation are skipped. A missing entity attribute on a forbid policy causes it to skip, allowing permits to fire. Attacker who controls entity data (via JWT claims or entities array) can selectively neuter forbid rules. Mitigation: mandatory pre-evaluation schema validation. Novel finding, no panelist challenged."
+
+[[findings]]
+id = 4
+severity = "P0"
+status = "unchallenged"
+title = "No consistency invariant for multi-instance policy distribution"
+raised_by = ["lamport"]
+description = "rust-pdp-service-architecture.md:138-143 -- four storage backends listed with no consistency model. Two PDP instances during rolling reload hold different active policy sets. Architecture must specify epoch-based versioning or bounded staleness guarantee."
+
+# --- P1 Findings ---
+
+[[findings]]
+id = 5
+severity = "P1"
+status = "defended"
+title = "Revocation window for cached entity hierarchy is unbounded"
+raised_by = ["lamport", "schneier", "agi-accelerationist"]
+description = "rust-pdp-service-architecture.md:150-158 -- entity cache TTL (30-60s) is the security boundary for role revocation. Deny list mentioned in entitlement-translation.md:176-179 but not implemented. 30-60s of unauthorized access after revocation."
+
+[[findings]]
+id = 6
+severity = "P1"
+status = "defended"
+title = "No policy CI/CD pipeline"
+raised_by = ["hashimoto"]
+description = "rust-pdp-service-architecture.md:136-143 -- four storage backends listed as equally valid. No pipeline spec (lint, validate, stage, deploy). Runtime validate-before-swap is not a pre-deploy gate. Git+webhook should be the default."
+
+[[findings]]
+id = 7
+severity = "P1"
+status = "unchallenged"
+title = "Decision logging absent"
+raised_by = ["hashimoto", "hightower"]
+description = "rust-pdp-service-architecture.md:201-210 -- Prometheus metrics exist but no decision audit log. Cedar diagnostics().reason() returns determining policy IDs but no persistence architecture. Compliance use case requires it. Cannot detect skip-on-error bypass after the fact without it."
+
+[[findings]]
+id = 8
+severity = "P1"
+status = "defended"
+title = "Decision cache key has no policy version component"
+raised_by = ["lamport", "antirez", "schneier"]
+description = "rust-pdp-service-architecture.md:163-178 -- cache key principal:action:resource encodes no entity epoch or policy version. Cached allows survive policy changes and role revocations for up to TTL. Under high fan-out, LRU eviction means cache provides no consistency guarantee."
+
+[[findings]]
+id = 9
+severity = "P1"
+status = "defended"
+title = "Cache stampede on TTL boundary"
+raised_by = ["antirez"]
+description = "rust-pdp-service-architecture.md:163-178 -- moka 10K entries, 60s TTL, no jitter, no stale-while-revalidate. Synchronized expiry spikes DB load. Classic stampede pattern."
+
+[[findings]]
+id = 10
+severity = "P1"
+status = "defended"
+title = "Admin reload endpoint unauthenticated"
+raised_by = ["schneier"]
+description = "rust-pdp-service-architecture.md:130 -- POST /admin/reload has no authentication requirement. Localhost-accessible in sidecar deployment. DoS via continuous reload, cache exhaustion."
+
+[[findings]]
+id = 11
+severity = "P1"
+status = "defended"
+title = "Batch endpoint blocking pool saturation at agent scale"
+raised_by = ["agi-accelerationist"]
+description = "rust-pdp-service-architecture.md:269-278 -- spawn_blocking per batch sub-request. Default tokio blocking pool is 512 threads. 1000 agents x 50-resource batches = pool saturation. No backpressure."
+
+[[findings]]
+id = 12
+severity = "P1"
+status = "unchallenged"
+title = "No delegation attenuation primitive for agent workloads"
+raised_by = ["agi-accelerationist"]
+description = "Cedar in operator gives transitive DAG membership but cannot express permission subsetting. Agent spawning sub-agents with scoped permissions requires external entity lifecycle management at agent-spawn rates."
+
+# --- P2 Findings ---
+
+[[findings]]
+id = 13
+severity = "P2"
+status = "conceded"
+title = "arc-swap torn-read window between PolicySet and Schema stores"
+raised_by = ["lamport"]
+challenged_by = ["dhh"]
+description = "Downgraded from P1 to P2 after DHH showed Cedar evaluation does not reference Schema at runtime. Structural fix (single Arc tuple swap) still recommended but evaluation path is safe."
+
+[[findings]]
+id = 14
+severity = "P2"
+status = "defended"
+title = "Four reload mechanisms is three too many"
+raised_by = ["dhh"]
+description = "rust-pdp-service-architecture.md:128-133 -- file watcher + SIGHUP + HTTP admin + periodic polling. Pick file watcher + HTTP admin, drop the rest."
+
+# --- Tension Point Decisions ---
+
+# These are the defended architecture decisions from the roundtable.
+
+# --- Actions ---
+
+[[actions]]
+id = 1
+priority = "P0"
+description = "Remove FailOpen bool from plugin Config struct. Replace with: (1) mandatory audit log on every fail-open request, (2) security team alert on activation, (3) automatic time-bound expiry (e.g., 4 hours), (4) per-route only, never global. Return 503+Retry-After for PDP unavailability, 403 for policy denies."
+disposition = "open"
+finding_refs = [1]
+raised_by = "schneier"
+consensus = true
+consensus_count = 9
+
+[[actions]]
+id = 2
+priority = "P0"
+description = "Implement mandatory pre-evaluation schema validation. All entity attributes validated against Cedar schema before is_authorized() call. Validation failure = deny (not pass-through to evaluation where forbid policies may skip-on-error)."
+disposition = "open"
+finding_refs = [2, 3]
+raised_by = "schneier"
+consensus = true
+consensus_count = 7
+
+[[actions]]
+id = 3
+priority = "P0"
+description = "Define PEP/PDP entity trust contract: partition entities into trusted (PDP-resolved from authoritative DB) and untrusted (PEP-supplied hints). Revocable security-critical attributes (roles, grants, permissions) must come from PDP-owned resolution. JWT claims may supply non-revocable identity attributes only. Enforce at API level, not documentation."
+disposition = "open"
+finding_refs = [2, 5]
+raised_by = "fowler"
+consensus = true
+consensus_count = 7
+
+[[actions]]
+id = 4
+priority = "P0"
+description = "Specify multi-instance policy distribution consistency model. Either: (a) epoch-based versioning with drain-and-reload for security-critical changes, or (b) explicit eventual consistency with stated maximum staleness bound. Document as architectural invariant."
+disposition = "open"
+finding_refs = [4]
+raised_by = "lamport"
+consensus = true
+consensus_count = 5
+
+[[actions]]
+id = 5
+priority = "P1"
+description = "Add decision audit logging: persist Cedar diagnostics (determining policy IDs, principal, action, resource, decision, timestamp) to searchable audit store. Required for compliance and post-incident analysis of skip-on-error bypass."
+disposition = "open"
+finding_refs = [7]
+raised_by = "hashimoto"
+consensus = true
+consensus_count = 5
+
+[[actions]]
+id = 6
+priority = "P1"
+description = "Specify policy CI/CD pipeline: git repo as source of truth, webhook trigger, staging validation (Cedar schema + policy validation), production rollout. Git+webhook as default, other backends as escape valves."
+disposition = "open"
+finding_refs = [6]
+raised_by = "hashimoto"
+consensus = true
+consensus_count = 4
+
+[[actions]]
+id = 7
+priority = "P1"
+description = "Version the decision cache key against policy epoch. Either include epoch in cache key, or invalidate entire cache on policy reload. Document that cache correctness depends on invalidation timing if neither is implemented."
+disposition = "open"
+finding_refs = [8, 9]
+raised_by = "lamport"
+consensus = true
+consensus_count = 5
+
+[[actions]]
+id = 8
+priority = "P1"
+description = "State latency budget explicitly in architecture spec. Derive plugin language choice (Go vs Lua) from the budget. If p99 SLA is tight, Lua eliminates IPC overhead. If development velocity is primary constraint, Go is acceptable. Do not defer this decision."
+disposition = "open"
+finding_refs = []
+raised_by = "cantrill"
+consensus = true
+consensus_count = 6
+
+[[actions]]
+id = 9
+priority = "P1"
+description = "Authenticate the admin reload endpoint (POST /admin/reload). Rate-limit to prevent DoS via continuous reload forcing cache exhaustion."
+disposition = "open"
+finding_refs = [10]
+raised_by = "schneier"
+consensus = true
+consensus_count = 3
+
+[[actions]]
+id = 10
+priority = "P2"
+description = "Use single Arc<(PolicySet, Schema)> tuple swap instead of two sequential store() calls. Eliminates torn-read class of problem for all current and future readers."
+disposition = "open"
+finding_refs = [13]
+raised_by = "lamport"
+consensus = true
+consensus_count = 4
