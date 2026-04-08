@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, Request};
 
+use crate::entities::{build_entities, build_request_uids, RequestContext};
 use crate::models::{
     AuthzRequest, AuthzResponse, Diagnostics, ErrorResponse, HealthResponse, PolicyInfoResponse,
 };
@@ -53,9 +54,32 @@ pub async fn is_authorized(
     State(store): State<AppState>,
     Json(req): Json<AuthzRequest>,
 ) -> Result<Json<AuthzResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let principal = parse_entity_uid(&req.principal).map_err(|e| bad_request(&e))?;
-    let action = parse_entity_uid(&req.action).map_err(|e| bad_request(&e))?;
-    let resource = parse_entity_uid(&req.resource).map_err(|e| bad_request(&e))?;
+    // Load policy state (lock-free via arc-swap) before branching so we can
+    // pass the schema to entity construction for P0-2 validation.
+    let state = store.load();
+    let (policy_set, schema) = state.as_ref();
+
+    let (principal, action, resource, entities) = if let Some(claims) = &req.claims {
+        // Claims path: treat req.action as HTTP method and req.resource as path.
+        // Entity UIDs are derived from claims and request context; the schema is
+        // used for entity validation (P0-2).
+        let request_ctx = RequestContext {
+            method: req.action.clone(),
+            path: req.resource.clone(),
+            service: None,
+        };
+        let (principal, action, resource) = build_request_uids(claims, &request_ctx)
+            .map_err(|e| bad_request(&format!("entity UID construction failed: {e}")))?;
+        let entities = build_entities(claims, &request_ctx, Some(schema))
+            .map_err(|e| bad_request(&format!("entity construction failed: {e}")))?;
+        (principal, action, resource, entities)
+    } else {
+        // Legacy path: parse Cedar entity UID strings, use empty entity set.
+        let principal = parse_entity_uid(&req.principal).map_err(|e| bad_request(&e))?;
+        let action = parse_entity_uid(&req.action).map_err(|e| bad_request(&e))?;
+        let resource = parse_entity_uid(&req.resource).map_err(|e| bad_request(&e))?;
+        (principal, action, resource, Entities::empty())
+    };
 
     let context = Context::from_json_value(
         serde_json::to_value(&req.context).unwrap_or(serde_json::Value::Object(Default::default())),
@@ -71,14 +95,6 @@ pub async fn is_authorized(
         None, // schema validation on request is optional; we validate entities separately
     )
     .map_err(|e| bad_request(&format!("invalid request: {e}")))?;
-
-    // Load policy state (lock-free via arc-swap)
-    let state = store.load();
-    let (policy_set, _schema) = state.as_ref();
-
-    // P0-2: Schema validation of entities happens at entity construction time.
-    // For MVP with no PEP-supplied entities, we use an empty entity set.
-    let entities = Entities::empty();
 
     let authorizer = Authorizer::new();
     let response = authorizer.is_authorized(&cedar_request, policy_set, &entities);

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::entities::Claims;
+
 #[derive(Debug, Deserialize)]
 pub struct AuthzRequest {
     pub principal: String,
@@ -8,6 +10,8 @@ pub struct AuthzRequest {
     pub resource: String,
     #[serde(default)]
     pub context: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub claims: Option<Claims>,
 }
 
 #[derive(Debug, Serialize)]
