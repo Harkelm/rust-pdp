@@ -1,0 +1,25 @@
+=== Cedar PDP Batch Stress Test ===
+Timestamp: 2026-04-08T12:37:22-05:00
+PDP: http://localhost:8180
+
+Running sequential baseline (100 requests, c=1)...
+Running batch comparison (1 x batch_100, c=1)...
+
+=== Batch vs Sequential Comparison ===
+Sequential (100 requests, c=1):  total=0.009s  per_request=0.085ms  p50=0.078ms  p99=0.455ms
+Batch (1 x 100, c=1):           total=0.002s  per_decision=0.020ms
+Speedup: 4.5x
+
+=== Batch Concurrency Scaling ===
+batch_size   concurrency   rps        p50_ms     p99_ms     decisions/sec  
+10           1             5680.8     0.164      0.503      56808.0        
+10           10            13506.5    0.604      1.176      135065.0       
+10           50            14909.6    1.966      6.117      149096.0       
+50           1             2009.9     0.473      0.801      100495.0       
+50           10            3679.4     2.604      4.643      183970.0       
+50           50            3761.7     7.168      25.972     188085.0       
+100          1             1271.1     0.739      1.794      127110.0       
+100          10            1865.1     5.016      10.245     186510.0       
+100          50            1926.6     18.604     51.155     192660.0       
+
+Results saved to: /home/harkelm/Documents/ccc/projects/rust-pdp/benchmarks/results/batch_stress_20260408T123722.txt

@@ -1,0 +1,5 @@
+=== Cedar PDP Batch Stress Test ===
+Timestamp: 2026-04-08T12:33:16-05:00
+PDP: http://localhost:8180
+
+Running sequential baseline (100 requests, c=1)...
