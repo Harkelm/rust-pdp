@@ -156,15 +156,17 @@ function CedarAuthHandler:access(conf)
       { ["Retry-After"] = "5" })
   end
 
-  -- PDP returned HTTP 503 (overloaded / backpressure) -> propagate 503 + Retry-After.
-  if res.status == 503 then
-    kong.log.warn("cedar-pdp: PDP returned 503 for principal=", principal_id,
-      " ", method, " ", path)
+  -- Any non-200 PDP response is a PDP error -> 503 + Retry-After (ADR-006).
+  -- CRITICAL: non-200 must NEVER produce 403 -- that would deny legitimate
+  -- requests due to PDP bugs, bad requests, or internal errors.
+  if res.status ~= 200 then
+    kong.log.warn("cedar-pdp: PDP returned ", res.status, " for principal=",
+      principal_id, " ", method, " ", path)
     return kong.response.exit(503, { message = "authorization service unavailable" },
       { ["Retry-After"] = "5" })
   end
 
-  -- Parse the response body.
+  -- Parse the response body (200 OK only).
   local response, decode_err = cjson.decode(res.body)
   if decode_err or not response then
     kong.log.err("cedar-pdp: failed to decode PDP response (status=", res.status,

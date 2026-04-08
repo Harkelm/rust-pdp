@@ -199,8 +199,9 @@ func callPDPForTest(pdpURL string, timeoutMs int, req pdpRequest) (decision stri
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusServiceUnavailable {
-		return "", 503, nil
+	// Any non-200 is a PDP error (plugin maps to 503).
+	if resp.StatusCode != http.StatusOK {
+		return "", resp.StatusCode, nil
 	}
 
 	var pdpResp pdpResponse
@@ -278,6 +279,55 @@ func TestResponseHandling_PDP503(t *testing.T) {
 		t.Errorf("statusCode = %d, want 503", statusCode)
 	}
 	// Plugin calls exit503() (503 + Retry-After) when PDP returns 503 -- never 403.
+}
+
+func TestResponseHandling_PDP400_NotDenied(t *testing.T) {
+	// PDP returning 400 (bad request) must NOT produce 403. Per ADR-006,
+	// any non-200 PDP response is treated as a PDP error -> 503+Retry-After.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid request"}`))
+	}))
+	defer srv.Close()
+
+	_, statusCode, err := callPDPForTest(srv.URL, 3000, pdpRequest{
+		Principal: toCedarPrincipal("alice"),
+		Action:    toCedarAction("GET"),
+		Resource:  toCedarResource("/api/v1/users"),
+		Context:   map[string]any{},
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if statusCode == 403 {
+		t.Error("CRITICAL ADR-006 VIOLATION: PDP 400 must not produce 403")
+	}
+	if statusCode != 400 {
+		t.Errorf("statusCode = %d, want 400 (plugin maps this to 503+Retry-After)", statusCode)
+	}
+}
+
+func TestResponseHandling_PDP500_NotDenied(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, statusCode, err := callPDPForTest(srv.URL, 3000, pdpRequest{
+		Principal: toCedarPrincipal("alice"),
+		Action:    toCedarAction("GET"),
+		Resource:  toCedarResource("/api/v1/users"),
+		Context:   map[string]any{},
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if statusCode == 403 {
+		t.Error("CRITICAL ADR-006 VIOLATION: PDP 500 must not produce 403")
+	}
 }
 
 func TestResponseHandling_Timeout(t *testing.T) {

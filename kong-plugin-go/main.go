@@ -258,17 +258,19 @@ func (conf *Config) Access(kong *pdk.PDK) {
 	}
 	defer resp.Body.Close()
 
-	// PDP returned HTTP 503 (overloaded / backpressure) -> propagate 503 + Retry-After.
-	if resp.StatusCode == http.StatusServiceUnavailable {
+	// Any non-200 PDP response is a PDP error -> 503 + Retry-After (ADR-006).
+	// CRITICAL: non-200 must NEVER produce 403 -- that would deny legitimate
+	// requests due to PDP bugs, bad requests, or internal errors.
+	if resp.StatusCode != http.StatusOK {
 		_ = kong.Log.Warn(fmt.Sprintf(
-			"cedar-pdp: PDP returned 503 for principal=%s %s %s",
-			principalID, method, path,
+			"cedar-pdp: PDP returned %d for principal=%s %s %s",
+			resp.StatusCode, principalID, method, path,
 		))
 		exit503(kong)
 		return
 	}
 
-	// Decode the response body.
+	// Decode the response body (200 OK only).
 	var pdpResp pdpResponse
 	if err := json.NewDecoder(resp.Body).Decode(&pdpResp); err != nil {
 		_ = kong.Log.Err(fmt.Sprintf(
