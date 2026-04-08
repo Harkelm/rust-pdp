@@ -74,8 +74,10 @@ impl PolicyStore {
         let mut policy_src = String::new();
         let mut schema_src = String::new();
 
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
+        let mut entries: Vec<_> = std::fs::read_dir(dir)?
+            .collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|e| e.path());
+        for entry in entries {
             let path = entry.path();
             match path.extension().and_then(|e| e.to_str()) {
                 Some("cedar") => {

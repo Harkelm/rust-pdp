@@ -22,6 +22,9 @@ import (
 	"github.com/Kong/go-pdk/server"
 )
 
+// Shared HTTP client -- reuses connections across requests (keep-alive).
+var pdpClient = &http.Client{}
+
 const Version = "1.0.0"
 const Priority = 925
 
@@ -165,8 +168,7 @@ func (conf *Config) Access(kong *pdk.PDK) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := pdpClient.Do(req)
 
 	// PDP timeout or connection error -> 503 + Retry-After (ADR-006).
 	// CRITICAL: timeout must never produce 403.

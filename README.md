@@ -74,6 +74,7 @@ projects/rust-pdp/
 - Rust 1.80+ (tested on 1.92)
 - Docker + Docker Compose (for integration tests)
 - Go 1.21+ (if building the Go plugin)
+- `luarocks install busted` (if running Lua plugin tests)
 
 ### Unit Tests
 

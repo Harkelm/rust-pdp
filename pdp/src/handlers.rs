@@ -92,7 +92,7 @@ pub async fn is_authorized(
         action,
         resource,
         context,
-        None, // schema validation on request is optional; we validate entities separately
+        Some(schema),
     )
     .map_err(|e| bad_request(&format!("invalid request: {e}")))?;
 
