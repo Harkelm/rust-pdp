@@ -1,0 +1,38 @@
+services:
+  pdp:
+    build:
+      context: ..
+      dockerfile: benchmarks/Dockerfile.pdp-prod
+    ports:
+      - "8180:8180"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8180/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  httpbin:
+    image: kennethreitz/httpbin:latest
+
+  kong:
+    image: kong:3.9
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+      KONG_LOG_LEVEL: info
+      KONG_PLUGINS: bundled,cedar-pdp
+      KONG_LUA_PACKAGE_PATH: "/usr/local/share/lua/5.1/kong/plugins/cedar-pdp/?.lua;;"
+    volumes:
+      - ./kong-lua.yml:/etc/kong/kong.yml:ro
+      - ../kong-plugin-lua/handler.lua:/usr/local/share/lua/5.1/kong/plugins/cedar-pdp/handler.lua:ro
+      - ../kong-plugin-lua/schema.lua:/usr/local/share/lua/5.1/kong/plugins/cedar-pdp/schema.lua:ro
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    depends_on:
+      pdp:
+        condition: service_healthy
+      httpbin:
+        condition: service_started

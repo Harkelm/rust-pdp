@@ -16,6 +16,7 @@ async fn start_server() -> SocketAddr {
 
     let app = Router::new()
         .route("/v1/is_authorized", post(cedar_pdp::handlers::is_authorized))
+        .route("/v1/batch_is_authorized", post(cedar_pdp::handlers::batch_is_authorized))
         .route("/v1/policy-info", get(cedar_pdp::handlers::policy_info))
         .route("/admin/reload", post(cedar_pdp::handlers::admin_reload))
         .route("/health", get(cedar_pdp::handlers::health))
@@ -118,6 +119,7 @@ async fn start_claims_server() -> SocketAddr {
 
     let app = Router::new()
         .route("/v1/is_authorized", post(cedar_pdp::handlers::is_authorized))
+        .route("/v1/batch_is_authorized", post(cedar_pdp::handlers::batch_is_authorized))
         .route("/health", get(cedar_pdp::handlers::health))
         .with_state(state);
 
@@ -285,4 +287,119 @@ async fn test_deny_decision() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["decision"], "Deny");
     assert!(body["diagnostics"]["reason"].as_array().unwrap().is_empty());
+}
+
+// --- Batch endpoint tests ---
+
+#[tokio::test]
+async fn test_batch_permit_and_deny() {
+    let addr = start_claims_server().await;
+    let client = reqwest::Client::new();
+
+    // Two requests: admin (Allow) and viewer-delete (Deny)
+    let resp = client
+        .post(format!("http://{addr}/v1/batch_is_authorized"))
+        .json(&serde_json::json!({
+            "requests": [
+                {
+                    "principal": "ignored",
+                    "action": "GET",
+                    "resource": "/api/v1/users",
+                    "context": {},
+                    "claims": {
+                        "sub": "alice",
+                        "email": "alice@example.com",
+                        "department": "engineering",
+                        "org": "acme",
+                        "roles": ["admin"],
+                        "subscription_tier": "enterprise",
+                        "suspended": false,
+                        "allowed_scopes": ["internal"]
+                    }
+                },
+                {
+                    "principal": "ignored",
+                    "action": "DELETE",
+                    "resource": "/api/v1/data",
+                    "context": {},
+                    "claims": {
+                        "sub": "bob",
+                        "email": "bob@example.com",
+                        "department": "sales",
+                        "org": "acme",
+                        "roles": ["viewer"],
+                        "subscription_tier": "basic",
+                        "suspended": false,
+                        "allowed_scopes": []
+                    }
+                }
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let responses = body["responses"].as_array().unwrap();
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["decision"], "Allow", "admin GET should be allowed");
+    assert_eq!(responses[1]["decision"], "Deny", "viewer DELETE should be denied");
+}
+
+#[tokio::test]
+async fn test_batch_empty() {
+    let addr = start_claims_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/batch_is_authorized"))
+        .json(&serde_json::json!({ "requests": [] }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let responses = body["responses"].as_array().unwrap();
+    assert!(responses.is_empty(), "empty batch should return empty responses");
+}
+
+#[tokio::test]
+async fn test_batch_exceeds_max() {
+    let addr = start_claims_server().await;
+    let client = reqwest::Client::new();
+
+    // Build 101 requests to exceed the max batch size of 100.
+    let single_req = serde_json::json!({
+        "principal": "ignored",
+        "action": "GET",
+        "resource": "/api/v1/data",
+        "context": {},
+        "claims": {
+            "sub": "user",
+            "email": "user@example.com",
+            "department": "engineering",
+            "org": "acme",
+            "roles": ["viewer"],
+            "subscription_tier": "basic",
+            "suspended": false,
+            "allowed_scopes": []
+        }
+    });
+    let requests: Vec<serde_json::Value> = (0..101).map(|_| single_req.clone()).collect();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/batch_is_authorized"))
+        .json(&serde_json::json!({ "requests": requests }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400, "batch exceeding 100 should return 400");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("maximum of 100"),
+        "error should mention the batch size limit"
+    );
 }

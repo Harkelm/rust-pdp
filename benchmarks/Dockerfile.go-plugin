@@ -1,0 +1,13 @@
+# Build the Go external plugin binary.
+# go.mod declares go 1.26.2, but golang:1.22 should satisfy go-pdk v0.11.2.
+# If the module toolchain directive forces a newer version, switch to golang:latest.
+FROM golang:latest AS builder
+WORKDIR /app
+COPY kong-plugin-go/ .
+RUN go mod download && go build -o cedar-pdp .
+
+# Install into a Kong image. The binary name "cedar-pdp" determines
+# the plugin name reported by the Go PDK server (-dump), which must
+# match the plugin name in Kong declarative config.
+FROM kong:3.9
+COPY --from=builder /app/cedar-pdp /usr/local/bin/cedar-pdp

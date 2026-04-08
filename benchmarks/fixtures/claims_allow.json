@@ -1,0 +1,16 @@
+{
+  "principal": "ignored",
+  "action": "GET",
+  "resource": "/api/v1/users",
+  "context": {},
+  "claims": {
+    "sub": "bench-user-1",
+    "email": "bench@example.com",
+    "department": "engineering",
+    "org": "acme",
+    "roles": ["editor", "viewer"],
+    "subscription_tier": "professional",
+    "suspended": false,
+    "allowed_scopes": ["internal", "public"]
+  }
+}

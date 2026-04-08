@@ -14,6 +14,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 notify = "7"
 sha2 = "0.10"
+rayon = "1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -24,3 +25,10 @@ tempfile = "3"
 [[bench]]
 name = "cedar_eval"
 harness = false
+
+[[bench]]
+name = "hierarchy_depth"
+harness = false
+
+[[example]]
+name = "memory_scaling"

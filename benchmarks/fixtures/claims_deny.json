@@ -1,0 +1,16 @@
+{
+  "principal": "ignored",
+  "action": "DELETE",
+  "resource": "/api/v1/admin/settings",
+  "context": {},
+  "claims": {
+    "sub": "bench-user-deny",
+    "email": "deny@example.com",
+    "department": "finance",
+    "org": "other-corp",
+    "roles": [],
+    "subscription_tier": "basic",
+    "suspended": false,
+    "allowed_scopes": []
+  }
+}

@@ -224,6 +224,7 @@ dependencies = [
  "cedar-policy",
  "criterion",
  "notify",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",

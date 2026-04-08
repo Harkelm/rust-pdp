@@ -37,6 +37,16 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BatchAuthzRequest {
+    pub requests: Vec<AuthzRequest>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchAuthzResponse {
+    pub responses: Vec<AuthzResponse>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PolicyInfoResponse {
     pub policy_count: usize,

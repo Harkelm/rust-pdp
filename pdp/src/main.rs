@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/v1/is_authorized", post(handlers::is_authorized))
+        .route("/v1/batch_is_authorized", post(handlers::batch_is_authorized))
         .route("/v1/policy-info", get(handlers::policy_info))
         .route("/admin/reload", post(handlers::admin_reload))
         .route("/health", get(handlers::health))

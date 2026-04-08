@@ -3,11 +3,12 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
-use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, Request};
+use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema};
 
 use crate::entities::{build_entities, build_request_uids, RequestContext};
 use crate::models::{
-    AuthzRequest, AuthzResponse, Diagnostics, ErrorResponse, HealthResponse, PolicyInfoResponse,
+    AuthzRequest, AuthzResponse, BatchAuthzRequest, BatchAuthzResponse, Diagnostics, ErrorResponse,
+    HealthResponse, PolicyInfoResponse,
 };
 use crate::policy::PolicyStore;
 
@@ -54,30 +55,88 @@ pub async fn is_authorized(
     State(store): State<AppState>,
     Json(req): Json<AuthzRequest>,
 ) -> Result<Json<AuthzResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Load policy state (lock-free via arc-swap) before branching so we can
-    // pass the schema to entity construction for P0-2 validation.
     let state = store.load();
     let (policy_set, schema) = state.as_ref();
+    Ok(Json(evaluate_single(&req, policy_set, schema)))
+}
 
+pub async fn batch_is_authorized(
+    State(store): State<AppState>,
+    Json(batch): Json<BatchAuthzRequest>,
+) -> Result<Json<BatchAuthzResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if batch.requests.len() > 100 {
+        return Err(bad_request("batch size exceeds maximum of 100"));
+    }
+    if batch.requests.is_empty() {
+        return Ok(Json(BatchAuthzResponse { responses: vec![] }));
+    }
+
+    // Load policy state once for the entire batch.
+    let state = store.load();
+    let policy_state = Arc::clone(&state);
+
+    // Use rayon for CPU-bound parallel evaluation instead of spawn_blocking
+    // per sub-request, which would saturate tokio's blocking thread pool.
+    let requests = batch.requests;
+    let responses = tokio::task::spawn_blocking(move || {
+        use rayon::prelude::*;
+        let (policy_set, schema) = policy_state.as_ref();
+        requests
+            .par_iter()
+            .map(|req| evaluate_single(req, policy_set, schema))
+            .collect::<Vec<AuthzResponse>>()
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("batch evaluation failed: {e}"),
+            }),
+        )
+    })?;
+
+    Ok(Json(BatchAuthzResponse { responses }))
+}
+
+/// Evaluate a single authorization request against the given policy set and schema.
+/// Returns `AuthzResponse` directly -- errors are mapped to Deny with diagnostics.
+fn evaluate_single(req: &AuthzRequest, policy_set: &PolicySet, schema: &Schema) -> AuthzResponse {
+    match evaluate_single_inner(req, policy_set, schema) {
+        Ok(resp) => resp,
+        Err(msg) => AuthzResponse {
+            decision: "Deny".to_string(),
+            diagnostics: Diagnostics {
+                reason: vec![],
+                errors: vec![msg],
+            },
+        },
+    }
+}
+
+/// Inner evaluation that can fail. Errors are surfaced as Deny by the caller.
+fn evaluate_single_inner(
+    req: &AuthzRequest,
+    policy_set: &PolicySet,
+    schema: &Schema,
+) -> Result<AuthzResponse, String> {
     let (principal, action, resource, entities) = if let Some(claims) = &req.claims {
         // Claims path: treat req.action as HTTP method and req.resource as path.
-        // Entity UIDs are derived from claims and request context; the schema is
-        // used for entity validation (P0-2).
         let request_ctx = RequestContext {
             method: req.action.clone(),
             path: req.resource.clone(),
             service: None,
         };
         let (principal, action, resource) = build_request_uids(claims, &request_ctx)
-            .map_err(|e| bad_request(&format!("entity UID construction failed: {e}")))?;
+            .map_err(|e| format!("entity UID construction failed: {e}"))?;
         let entities = build_entities(claims, &request_ctx, Some(schema))
-            .map_err(|e| bad_request(&format!("entity construction failed: {e}")))?;
+            .map_err(|e| format!("entity construction failed: {e}"))?;
         (principal, action, resource, entities)
     } else {
         // Legacy path: parse Cedar entity UID strings, use empty entity set.
-        let principal = parse_entity_uid(&req.principal).map_err(|e| bad_request(&e))?;
-        let action = parse_entity_uid(&req.action).map_err(|e| bad_request(&e))?;
-        let resource = parse_entity_uid(&req.resource).map_err(|e| bad_request(&e))?;
+        let principal = parse_entity_uid(&req.principal).map_err(|e| e.to_string())?;
+        let action = parse_entity_uid(&req.action).map_err(|e| e.to_string())?;
+        let resource = parse_entity_uid(&req.resource).map_err(|e| e.to_string())?;
         (principal, action, resource, Entities::empty())
     };
 
@@ -85,16 +144,10 @@ pub async fn is_authorized(
         serde_json::to_value(&req.context).unwrap_or(serde_json::Value::Object(Default::default())),
         None,
     )
-    .map_err(|e| bad_request(&format!("invalid context: {e}")))?;
+    .map_err(|e| format!("invalid context: {e}"))?;
 
-    let cedar_request = Request::new(
-        principal,
-        action,
-        resource,
-        context,
-        Some(schema),
-    )
-    .map_err(|e| bad_request(&format!("invalid request: {e}")))?;
+    let cedar_request = Request::new(principal, action, resource, context, Some(schema))
+        .map_err(|e| format!("invalid request: {e}"))?;
 
     let authorizer = Authorizer::new();
     let response = authorizer.is_authorized(&cedar_request, policy_set, &entities);
@@ -116,10 +169,10 @@ pub async fn is_authorized(
         .map(|e| e.to_string())
         .collect();
 
-    Ok(Json(AuthzResponse {
+    Ok(AuthzResponse {
         decision: decision.to_string(),
         diagnostics: Diagnostics { reason, errors },
-    }))
+    })
 }
 
 /// Parse Cedar entity UID from string like `Type::"id"`.

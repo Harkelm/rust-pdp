@@ -1,0 +1,24 @@
+_format_version: "3.0"
+
+consumers:
+  - username: bench-user
+    keyauth_credentials:
+      - key: bench-key
+
+services:
+  - name: upstream
+    url: http://httpbin:80/anything
+    routes:
+      - name: bench-route
+        paths:
+          - /api/test
+        strip_path: true
+    plugins:
+      - name: key-auth
+        config:
+          key_names: ["apikey"]
+      - name: cedar-pdp
+        config:
+          pdp_url: "http://pdp:8180"
+          timeout_ms: 3000
+          cache_ttl_ms: 1

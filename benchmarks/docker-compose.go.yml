@@ -1,0 +1,40 @@
+services:
+  pdp:
+    build:
+      context: ..
+      dockerfile: benchmarks/Dockerfile.pdp-prod
+    ports:
+      - "8180:8180"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8180/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  httpbin:
+    image: kennethreitz/httpbin:latest
+
+  kong:
+    build:
+      context: ..
+      dockerfile: benchmarks/Dockerfile.go-plugin
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+      KONG_LOG_LEVEL: info
+      KONG_PLUGINS: bundled,cedar-pdp
+      KONG_PLUGINSERVER_NAMES: cedar-pdp
+      KONG_PLUGINSERVER_CEDAR_PDP_START_CMD: /usr/local/bin/cedar-pdp
+      KONG_PLUGINSERVER_CEDAR_PDP_QUERY_CMD: /usr/local/bin/cedar-pdp -dump
+    volumes:
+      - ./kong-go.yml:/etc/kong/kong.yml:ro
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    depends_on:
+      pdp:
+        condition: service_healthy
+      httpbin:
+        condition: service_started
