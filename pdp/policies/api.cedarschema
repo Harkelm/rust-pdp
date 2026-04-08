@@ -1,0 +1,18 @@
+entity User in [Role] {
+    email: String,
+    department?: String,
+};
+
+entity Role;
+
+entity ApiResource;
+
+action ViewResource appliesTo {
+    principal: [User],
+    resource: [ApiResource],
+};
+
+action EditResource appliesTo {
+    principal: [User],
+    resource: [ApiResource],
+};
