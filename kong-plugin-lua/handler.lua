@@ -63,22 +63,35 @@ local function get_principal()
   return "anonymous"
 end
 
--- Build a Cedar entity UID string from a raw identifier.
--- Format: User::"<id>"
+-- Build a Cedar entity UID string with ApiGateway namespace.
 local function to_cedar_principal(id)
-  return string.format('User::"%s"', id)
+  return string.format('ApiGateway::User::"%s"', id)
 end
 
--- Build the Cedar action UID from the HTTP method.
--- HTTP method is lowercased: GET -> Action::"get"
+-- Map HTTP method to Cedar action name per the ApiGateway schema.
+-- Must match entities.rs method_to_action for consistency between legacy and claims paths.
+local method_action_map = {
+  GET     = "read",
+  HEAD    = "read",
+  OPTIONS = "read",
+  POST    = "write",
+  PUT     = "write",
+  PATCH   = "write",
+  DELETE  = "delete",
+}
+
+local function method_to_action(method)
+  return method_action_map[string.upper(method)] or "read"
+end
+
+-- Build the Cedar action UID with ApiGateway namespace.
 local function to_cedar_action(method)
-  return string.format('Action::"%s"', string.lower(method))
+  return string.format('ApiGateway::Action::"%s"', method_to_action(method))
 end
 
--- Build the Cedar resource UID from the request path.
--- Format: Resource::"<path>"
+-- Build the Cedar resource UID with ApiGateway namespace.
 local function to_cedar_resource(path)
-  return string.format('Resource::"%s"', path)
+  return string.format('ApiGateway::ApiResource::"%s"', path)
 end
 
 function CedarAuthHandler:access(conf)

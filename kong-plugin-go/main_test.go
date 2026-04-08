@@ -26,9 +26,9 @@ func TestToCedarPrincipal(t *testing.T) {
 		id   string
 		want string
 	}{
-		{"alice", `User::"alice"`},
-		{"anonymous", `User::"anonymous"`},
-		{"550e8400-e29b-41d4-a716-446655440000", `User::"550e8400-e29b-41d4-a716-446655440000"`},
+		{"alice", `ApiGateway::User::"alice"`},
+		{"anonymous", `ApiGateway::User::"anonymous"`},
+		{"550e8400-e29b-41d4-a716-446655440000", `ApiGateway::User::"550e8400-e29b-41d4-a716-446655440000"`},
 	}
 	for _, c := range cases {
 		got := toCedarPrincipal(c.id)
@@ -38,15 +38,38 @@ func TestToCedarPrincipal(t *testing.T) {
 	}
 }
 
+func TestMethodToAction(t *testing.T) {
+	cases := []struct {
+		method string
+		want   string
+	}{
+		{"GET", "read"},
+		{"HEAD", "read"},
+		{"OPTIONS", "read"},
+		{"POST", "write"},
+		{"PUT", "write"},
+		{"PATCH", "write"},
+		{"DELETE", "delete"},
+		{"get", "read"},
+		{"UNKNOWN", "read"},
+	}
+	for _, c := range cases {
+		got := methodToAction(c.method)
+		if got != c.want {
+			t.Errorf("methodToAction(%q) = %q, want %q", c.method, got, c.want)
+		}
+	}
+}
+
 func TestToCedarAction(t *testing.T) {
 	cases := []struct {
 		method string
 		want   string
 	}{
-		{"GET", `Action::"get"`},
-		{"POST", `Action::"post"`},
-		{"DELETE", `Action::"delete"`},
-		{"get", `Action::"get"`},
+		{"GET", `ApiGateway::Action::"read"`},
+		{"POST", `ApiGateway::Action::"write"`},
+		{"DELETE", `ApiGateway::Action::"delete"`},
+		{"get", `ApiGateway::Action::"read"`},
 	}
 	for _, c := range cases {
 		got := toCedarAction(c.method)
@@ -61,9 +84,9 @@ func TestToCedarResource(t *testing.T) {
 		path string
 		want string
 	}{
-		{"/api/v1/users", `Resource::"/api/v1/users"`},
-		{"/", `Resource::"/"`},
-		{"/api/v1/users/42", `Resource::"/api/v1/users/42"`},
+		{"/api/v1/users", `ApiGateway::ApiResource::"/api/v1/users"`},
+		{"/", `ApiGateway::ApiResource::"/"`},
+		{"/api/v1/users/42", `ApiGateway::ApiResource::"/api/v1/users/42"`},
 	}
 	for _, c := range cases {
 		got := toCedarResource(c.path)
@@ -132,14 +155,14 @@ func TestPdpRequestConstruction(t *testing.T) {
 		t.Fatalf("failed to unmarshal pdpRequest JSON: %v", err)
 	}
 
-	if out["principal"] != `User::"alice"` {
-		t.Errorf("principal = %v, want User::\"alice\"", out["principal"])
+	if out["principal"] != `ApiGateway::User::"alice"` {
+		t.Errorf("principal = %v, want ApiGateway::User::\"alice\"", out["principal"])
 	}
-	if out["action"] != `Action::"get"` {
-		t.Errorf("action = %v, want Action::\"get\"", out["action"])
+	if out["action"] != `ApiGateway::Action::"read"` {
+		t.Errorf("action = %v, want ApiGateway::Action::\"read\"", out["action"])
 	}
-	if out["resource"] != `Resource::"/api/v1/users"` {
-		t.Errorf("resource = %v, want Resource::\"/api/v1/users\"", out["resource"])
+	if out["resource"] != `ApiGateway::ApiResource::"/api/v1/users"` {
+		t.Errorf("resource = %v, want ApiGateway::ApiResource::\"/api/v1/users\"", out["resource"])
 	}
 	ctx, ok := out["context"].(map[string]any)
 	if !ok || len(ctx) != 0 {

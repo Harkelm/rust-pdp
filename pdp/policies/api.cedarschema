@@ -1,18 +1,25 @@
-entity User in [Role] {
-    email: String,
-    department?: String,
-};
+namespace ApiGateway {
+  entity Role;
 
-entity Role;
+  entity User in [Role] {
+      email: String,
+      department?: String,
+  };
 
-entity ApiResource;
+  entity ApiResource;
 
-action ViewResource appliesTo {
-    principal: [User],
-    resource: [ApiResource],
-};
+  action "read" appliesTo {
+      principal: [User],
+      resource: [ApiResource],
+  };
 
-action EditResource appliesTo {
-    principal: [User],
-    resource: [ApiResource],
-};
+  action "write" appliesTo {
+      principal: [User],
+      resource: [ApiResource],
+  };
+
+  action "delete" appliesTo {
+      principal: [User],
+      resource: [ApiResource],
+  };
+}

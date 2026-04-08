@@ -86,13 +86,13 @@ async fn test_permit_decision() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    // alice has a direct permit policy for ViewResource
+    // alice has a direct permit policy for read
     let resp = client
         .post(format!("http://{addr}/v1/is_authorized"))
         .json(&serde_json::json!({
-            "principal": "User::\"alice\"",
-            "action": "Action::\"ViewResource\"",
-            "resource": "ApiResource::\"doc-1\""
+            "principal": "ApiGateway::User::\"alice\"",
+            "action": "ApiGateway::Action::\"read\"",
+            "resource": "ApiGateway::ApiResource::\"doc-1\""
         }))
         .send()
         .await
@@ -101,7 +101,6 @@ async fn test_permit_decision() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["decision"], "Allow");
-    // The determining policy should be "alice-view"
     let reasons = body["diagnostics"]["reason"].as_array().unwrap();
     assert!(!reasons.is_empty(), "expected at least one determining policy");
 }
@@ -270,13 +269,13 @@ async fn test_deny_decision() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    // Unknown action -- no permit policy matches, so deny.
+    // bob has no permit policy, so read is denied.
     let resp = client
         .post(format!("http://{addr}/v1/is_authorized"))
         .json(&serde_json::json!({
-            "principal": "User::\"bob\"",
-            "action": "Action::\"DeleteResource\"",
-            "resource": "ApiResource::\"doc-1\""
+            "principal": "ApiGateway::User::\"bob\"",
+            "action": "ApiGateway::Action::\"read\"",
+            "resource": "ApiGateway::ApiResource::\"doc-1\""
         }))
         .send()
         .await

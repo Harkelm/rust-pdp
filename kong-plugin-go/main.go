@@ -114,19 +114,34 @@ func getPrincipal(kong *pdk.PDK) (string, error) {
 	return "anonymous", nil
 }
 
-// toCedarPrincipal formats an ID as a Cedar entity UID: User::"<id>"
+// toCedarPrincipal formats an ID as a Cedar entity UID with ApiGateway namespace.
 func toCedarPrincipal(id string) string {
-	return fmt.Sprintf(`User::"%s"`, id)
+	return fmt.Sprintf(`ApiGateway::User::"%s"`, id)
 }
 
-// toCedarAction formats an HTTP method as a Cedar entity UID: Action::"<method_lowercase>"
+// methodToAction maps HTTP method to Cedar action name per the ApiGateway schema.
+// Must match entities.rs method_to_action for consistency between legacy and claims paths.
+func methodToAction(method string) string {
+	switch strings.ToUpper(method) {
+	case "GET", "HEAD", "OPTIONS":
+		return "read"
+	case "POST", "PUT", "PATCH":
+		return "write"
+	case "DELETE":
+		return "delete"
+	default:
+		return "read"
+	}
+}
+
+// toCedarAction formats an HTTP method as a Cedar entity UID with ApiGateway namespace.
 func toCedarAction(method string) string {
-	return fmt.Sprintf(`Action::"%s"`, strings.ToLower(method))
+	return fmt.Sprintf(`ApiGateway::Action::"%s"`, methodToAction(method))
 }
 
-// toCedarResource formats a path as a Cedar entity UID: Resource::"<path>"
+// toCedarResource formats a path as a Cedar entity UID with ApiGateway namespace.
 func toCedarResource(path string) string {
-	return fmt.Sprintf(`Resource::"%s"`, path)
+	return fmt.Sprintf(`ApiGateway::ApiResource::"%s"`, path)
 }
 
 var body503 = []byte(`{"message":"authorization service unavailable"}`)
