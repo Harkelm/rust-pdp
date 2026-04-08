@@ -57,7 +57,7 @@ projects/rust-pdp/
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration.rs (12 tests), validate_policies.rs
+    tests/                  #   integration, security, concurrency, policy_coverage, etc. (96 tests)
     benches/                #   cedar_eval.rs, hierarchy_depth.rs (Criterion benchmarks)
     examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
@@ -70,6 +70,29 @@ projects/rust-pdp/
     raw/archived/           # Raw research deposits
     sources.toml            # Tracked external sources
 ```
+
+## Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CEDAR_POLICY_DIR` | `./policies` | Path to directory containing `.cedar` and `.cedarschema` files |
+| `PDP_PORT` | `8180` | HTTP server listen port |
+| `PDP_ADMIN_TOKEN` | _(unset)_ | Bearer token for `/admin/reload`. If unset, admin is unrestricted (dev mode) with startup warning |
+| `RUST_LOG` | `cedar_pdp=info` | Tracing filter directive |
+
+## API Endpoints
+
+| Endpoint | Method | Auth | Purpose |
+|----------|--------|------|---------|
+| `/v1/is_authorized` | POST | None | Single authorization decision |
+| `/v1/batch_is_authorized` | POST | None | Batch authorization (max 100, rayon parallel) |
+| `/v1/policy-info` | GET | None | Policy count, last reload time, schema hash |
+| `/admin/reload` | POST | Bearer `PDP_ADMIN_TOKEN` | Force policy reload from disk |
+| `/healthz` | GET | None | Liveness probe (always 200 if process is up) |
+| `/readyz` | GET | None | Readiness probe (200 when policies loaded) |
+| `/health` | GET | None | Backward-compat alias for `/readyz` |
+
+All responses include an `X-Request-Id` header (propagated from request or generated UUID v4).
 
 ## Running
 
@@ -84,7 +107,7 @@ projects/rust-pdp/
 
 ```bash
 cd pdp && cargo test
-# Runs 24 tests: 11 unit (policy + entity), 12 integration, 1 schema validation
+# Runs 96 tests: 11 unit (policy + entity), 84 integration, 1 schema validation
 ```
 
 ### Criterion Benchmarks
@@ -100,6 +123,7 @@ cd pdp && cargo bench
 ```bash
 # Terminal 1: start PDP with test policies
 cd pdp && CEDAR_POLICY_DIR=../tests/integration/policies cargo run
+# Optional env vars: PDP_PORT=8181, PDP_ADMIN_TOKEN=secret
 
 # Terminal 2: run load test (1000 requests by default)
 cd benchmarks && bash http_load_test.sh
@@ -163,13 +187,18 @@ for what remains before production (Phase 1: 13-24 eng-days).
 - Concurrent HTTP throughput benchmarks (oha-based, configurable concurrency)
 - Go vs Lua plugin comparison infrastructure (Docker stacks, automated scripts)
 - Cache effectiveness and stampede simulation benchmarks
+- Admin endpoint authentication (`PDP_ADMIN_TOKEN` Bearer token)
+- Graceful shutdown (SIGTERM/SIGINT drain with in-flight request completion)
+- Kubernetes-style health probes (`/healthz` liveness, `/readyz` readiness)
+- X-Request-Id middleware (propagate or generate UUID v4 for log correlation)
+- Configurable port via `PDP_PORT` env var (default 8180)
+- Non-root container user in production Dockerfile
 
 **What's not built yet (Phase 1 scope):**
 - AuthZen endpoint (`/access/v1/evaluation`) -- deferred; enables engine-agnostic
   external access and PDP engine portability (see ADR-002)
 - Tier 2 entity resolution (DB-backed roles/entitlements)
 - Decision audit logging
-- Admin endpoint authentication
 - Shadow mode enforcement toggle
 - Policy CI/CD pipeline
 

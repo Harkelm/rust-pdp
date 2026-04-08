@@ -55,18 +55,28 @@ Multiple agents may work in this repo simultaneously. Safety rules:
   another agent may be mid-edit. Read before writing. If in doubt, skip that file
   and note it in your handoff.
 
+## Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CEDAR_POLICY_DIR` | `./policies` | Policy/schema directory |
+| `PDP_PORT` | `8180` | HTTP listen port |
+| `PDP_ADMIN_TOKEN` | _(unset)_ | Bearer token for `/admin/reload` (dev mode if unset) |
+| `RUST_LOG` | `cedar_pdp=info` | Tracing filter |
+
 ## Testing
 
 ```bash
 cd pdp
-cargo test                    # all unit + integration tests
+cargo test                    # all unit + integration tests (96 tests)
 cargo bench                   # all Criterion benchmarks
 cargo bench --bench cedar_eval  # specific benchmark group
 cargo run --example memory_scaling --release  # heap measurement
 ```
 
 Tests use production Cedar policies from `../policies/`. Integration tests spin up
-an axum server on a random port per test.
+an axum server on a random port per test. Tests construct `AppContext::new(store, None)`
+(no admin token) so admin endpoints are unrestricted in test mode.
 
 ## Constraints
 

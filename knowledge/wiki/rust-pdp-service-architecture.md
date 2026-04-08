@@ -127,7 +127,7 @@ impl PolicyStore {
 
 1. **File watcher** (`notify` crate): Watch policy directory, reload on change
 2. **SIGHUP handler**: Manual reload via signal
-3. **HTTP admin endpoint**: `POST /admin/reload`
+3. **HTTP admin endpoint**: `POST /admin/reload` (authenticated via `PDP_ADMIN_TOKEN` Bearer token)
 4. **Periodic polling**: Timer-based check (cedar-local-agent uses 15s minimum)
 
 **Critical**: Validation-before-swap ensures broken policy files never become active.
@@ -182,9 +182,9 @@ Invalidation strategies:
 
 ### Health Endpoints
 
-- `GET /health/live` -- process alive (always 200)
-- `GET /health/ready` -- policies loaded, entity store accessible
-- `GET /health/startup` -- initial load complete
+- `GET /healthz` -- liveness probe (always 200 if process is up)
+- `GET /readyz` -- readiness probe (policies loaded, schema valid)
+- `GET /health` -- backward-compat alias for `/readyz`
 
 ### Metrics (Prometheus)
 
@@ -236,8 +236,8 @@ Fail-closed by default. Never fail-open unless explicitly configured.
                 |                   |
                 | /v1/is_authorized | <-- Cedar-native
                 | /access/v1/eval   | <-- AuthZen
-                | /admin/reload     | <-- Admin
-                | /health/*         | <-- Health
+                | /admin/reload     | <-- Admin (Bearer PDP_ADMIN_TOKEN)
+                | /healthz,/readyz  | <-- Health probes
                 | /metrics          | <-- Prometheus
                 +--------+----------+
                          |

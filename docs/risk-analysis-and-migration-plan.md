@@ -115,7 +115,9 @@ endpoint authentication.
   network policy restricting access to Kong pod only). Rate-limit reload requests.
   For sidecar deployment, network policy restricting to localhost is an acceptable
   interim measure.
-- **Status**: Open. Acceptable for sidecar MVP with localhost network restriction.
+- **Status**: Addressed. `PDP_ADMIN_TOKEN` env var enables Bearer token
+  authentication on `/admin/reload`. Without it, the endpoint is unrestricted
+  (dev mode) with a startup warning. Rate-limiting remains backlog.
 
 ### Risk 8: Policy CI/CD Pipeline Absent
 

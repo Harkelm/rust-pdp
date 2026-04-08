@@ -73,4 +73,5 @@ prerequisites. They should block the implementation tasks that depend on them:
 - **Decision audit logging architecture** -- persist Cedar diagnostics for
   compliance and post-incident analysis. Blocks production deployment.
 - **Admin endpoint authentication** -- POST /admin/reload must be authenticated
-  and rate-limited.
+  and rate-limited. **Status: Addressed.** `PDP_ADMIN_TOKEN` env var enables
+  Bearer token authentication. Rate-limiting not yet implemented (backlog).

@@ -40,6 +40,8 @@ SIGHUP and periodic polling add complexity without value. File watcher covers
 automated reload; admin endpoint covers manual/CI-triggered reload.
 
 The admin endpoint must be authenticated and rate-limited (see prerequisites.md).
+Authentication is implemented via `PDP_ADMIN_TOKEN` Bearer token. Rate-limiting
+is backlog.
 
 ### Policy delivery for multi-instance
 
