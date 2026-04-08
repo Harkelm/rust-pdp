@@ -51,7 +51,9 @@ func TestMethodToAction(t *testing.T) {
 		{"PATCH", "write"},
 		{"DELETE", "delete"},
 		{"get", "read"},
-		{"UNKNOWN", "read"},
+		{"UNKNOWN", ""},
+		{"TRACE", ""},
+		{"PURGE", ""},
 	}
 	for _, c := range cases {
 		got := methodToAction(c.method)

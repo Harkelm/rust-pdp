@@ -121,6 +121,7 @@ func toCedarPrincipal(id string) string {
 
 // methodToAction maps HTTP method to Cedar action name per the ApiGateway schema.
 // Must match entities.rs method_to_action for consistency between legacy and claims paths.
+// Returns empty string for unknown methods (caller must deny).
 func methodToAction(method string) string {
 	switch strings.ToUpper(method) {
 	case "GET", "HEAD", "OPTIONS":
@@ -130,7 +131,7 @@ func methodToAction(method string) string {
 	case "DELETE":
 		return "delete"
 	default:
-		return "read"
+		return ""
 	}
 }
 
@@ -180,6 +181,17 @@ func (conf *Config) Access(kong *pdk.PDK) {
 	if err != nil {
 		_ = kong.Log.Err("cedar-pdp: failed to get request path: " + err.Error())
 		exit503(kong)
+		return
+	}
+
+	// Reject unknown HTTP methods (BL-164). Unknown methods must not default
+	// to "read" -- that would allow TRACE, PURGE, etc. through read policies.
+	if methodToAction(method) == "" {
+		_ = kong.Log.Warn(fmt.Sprintf(
+			"cedar-pdp: unknown HTTP method %s denied for principal=%s %s",
+			method, principalID, path,
+		))
+		kong.Response.Exit(403, body403, nil)
 		return
 	}
 

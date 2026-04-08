@@ -81,7 +81,7 @@ local method_action_map = {
 }
 
 local function method_to_action(method)
-  return method_action_map[string.upper(method)] or "read"
+  return method_action_map[string.upper(method)]
 end
 
 -- Build the Cedar action UID with ApiGateway namespace.
@@ -99,6 +99,14 @@ function CedarAuthHandler:access(conf)
   local principal_id = get_principal()
   local method       = kong.request.get_method()
   local path         = kong.request.get_path()
+
+  -- Reject unknown HTTP methods (BL-164). Unknown methods must not default
+  -- to "read" -- that would allow TRACE, PURGE, etc. through read policies.
+  if not method_to_action(method) then
+    kong.log.warn("cedar-pdp: unknown HTTP method ", method, " denied for principal=",
+      principal_id, " ", path)
+    return kong.response.exit(403, { message = "forbidden" })
+  end
 
   local principal = to_cedar_principal(principal_id)
   local action    = to_cedar_action(method)

@@ -35,16 +35,13 @@ pub struct RequestContext {
 }
 
 /// Map HTTP method to Cedar action name per schema.
-pub fn method_to_action(method: &str) -> &str {
+/// Returns None for unknown methods -- caller must reject the request.
+pub fn method_to_action(method: &str) -> Option<&'static str> {
     match method.to_uppercase().as_str() {
-        "GET" => "read",
-        "HEAD" => "read",
-        "POST" => "write",
-        "PUT" => "write",
-        "PATCH" => "write",
-        "DELETE" => "delete",
-        "OPTIONS" => "read",
-        _ => "read",
+        "GET" | "HEAD" | "OPTIONS" => Some("read"),
+        "POST" | "PUT" | "PATCH" => Some("write"),
+        "DELETE" => Some("delete"),
+        _ => None,
     }
 }
 
@@ -215,10 +212,9 @@ pub fn build_request_uids(
     request_ctx: &RequestContext,
 ) -> Result<(EntityUid, EntityUid, EntityUid), String> {
     let principal = entity_uid("ApiGateway::User", &claims.sub)?;
-    let action = entity_uid(
-        "ApiGateway::Action",
-        method_to_action(&request_ctx.method),
-    )?;
+    let action_name = method_to_action(&request_ctx.method)
+        .ok_or_else(|| format!("unknown HTTP method: {}", request_ctx.method))?;
+    let action = entity_uid("ApiGateway::Action", action_name)?;
     let resource = entity_uid("ApiGateway::ApiResource", &request_ctx.path)?;
     Ok((principal, action, resource))
 }
@@ -363,14 +359,16 @@ mod tests {
 
     #[test]
     fn test_method_to_action_mapping() {
-        assert_eq!(method_to_action("GET"), "read");
-        assert_eq!(method_to_action("HEAD"), "read");
-        assert_eq!(method_to_action("POST"), "write");
-        assert_eq!(method_to_action("PUT"), "write");
-        assert_eq!(method_to_action("PATCH"), "write");
-        assert_eq!(method_to_action("DELETE"), "delete");
-        assert_eq!(method_to_action("OPTIONS"), "read");
-        assert_eq!(method_to_action("UNKNOWN"), "read", "unknown methods default to read");
+        assert_eq!(method_to_action("GET"), Some("read"));
+        assert_eq!(method_to_action("HEAD"), Some("read"));
+        assert_eq!(method_to_action("POST"), Some("write"));
+        assert_eq!(method_to_action("PUT"), Some("write"));
+        assert_eq!(method_to_action("PATCH"), Some("write"));
+        assert_eq!(method_to_action("DELETE"), Some("delete"));
+        assert_eq!(method_to_action("OPTIONS"), Some("read"));
+        assert_eq!(method_to_action("UNKNOWN"), None, "unknown methods must be rejected");
+        assert_eq!(method_to_action("TRACE"), None);
+        assert_eq!(method_to_action("PURGE"), None);
     }
 
     #[test]
