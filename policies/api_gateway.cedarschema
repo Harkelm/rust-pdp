@@ -1,0 +1,63 @@
+namespace ApiGateway {
+    // Tier 3 - Static Hierarchy
+    entity Organization;
+
+    entity SubscriptionTier in [SubscriptionTier];
+
+    entity Team in [Organization];
+
+    entity Role in [Role];
+
+    // Tier 1 + Tier 2 attributes on User -- all forbid-referenced attributes are required (P0-2)
+    entity User in [Role, Team, Organization] {
+        // Tier 1 -- non-revocable identity from JWT
+        email: String,
+        department: String,
+        org: String,
+        allowed_scopes: Set<String>,
+        // Tier 2 -- required per P0-2 (forbid policies reference these;
+        // missing attributes on a forbid condition cause the forbid to be skipped,
+        // which is a security bypass -- mark required to prevent skip-on-error)
+        subscription_tier: String,
+        suspended: Bool,
+    };
+
+    // Resources
+    entity ApiResource {
+        service: String,
+        path_pattern: String,
+        department: String,
+        classification: String,
+        owner_org: String,
+    };
+
+    entity Feature {
+        required_tier: String,
+    };
+
+    // Actions
+    action "read" appliesTo {
+        principal: [User],
+        resource: [ApiResource, Feature],
+    };
+
+    action "write" appliesTo {
+        principal: [User],
+        resource: [ApiResource],
+    };
+
+    action "delete" appliesTo {
+        principal: [User],
+        resource: [ApiResource],
+    };
+
+    action "list" appliesTo {
+        principal: [User],
+        resource: [ApiResource],
+    };
+
+    action "admin" appliesTo {
+        principal: [User],
+        resource: [ApiResource],
+    };
+}
