@@ -30,5 +30,21 @@ harness = false
 name = "hierarchy_depth"
 harness = false
 
+[[bench]]
+name = "batch_throughput"
+harness = false
+
+[[bench]]
+name = "entity_construction"
+harness = false
+
+[[bench]]
+name = "reload_contention"
+harness = false
+
+[[bench]]
+name = "mixed_workload"
+harness = false
+
 [[example]]
 name = "memory_scaling"
