@@ -5,7 +5,9 @@ use axum::http::StatusCode;
 use axum::Json;
 use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, Request};
 
-use crate::models::{AuthzRequest, AuthzResponse, Diagnostics, ErrorResponse, HealthResponse};
+use crate::models::{
+    AuthzRequest, AuthzResponse, Diagnostics, ErrorResponse, HealthResponse, PolicyInfoResponse,
+};
 use crate::policy::PolicyStore;
 
 pub type AppState = Arc<PolicyStore>;
@@ -15,6 +17,36 @@ pub async fn health(State(store): State<AppState>) -> Json<HealthResponse> {
         status: "ok".to_string(),
         policies_loaded: store.policy_count(),
     })
+}
+
+pub async fn policy_info(State(store): State<AppState>) -> Json<PolicyInfoResponse> {
+    Json(PolicyInfoResponse {
+        policy_count: store.policy_count(),
+        last_reload_epoch_ms: store.last_reload_epoch_ms(),
+        schema_hash: store.schema_hash(),
+    })
+}
+
+pub async fn admin_reload(
+    State(store): State<AppState>,
+) -> Result<Json<PolicyInfoResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let old_count = store.policy_count();
+    match store.reload() {
+        Ok(new_count) => {
+            tracing::info!(old_count, new_count, "manual policy reload successful");
+            Ok(Json(PolicyInfoResponse {
+                policy_count: new_count,
+                last_reload_epoch_ms: store.last_reload_epoch_ms(),
+                schema_hash: store.schema_hash(),
+            }))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("reload failed: {e}"),
+            }),
+        )),
+    }
 }
 
 pub async fn is_authorized(

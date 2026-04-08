@@ -32,3 +32,10 @@ pub struct HealthResponse {
 pub struct ErrorResponse {
     pub error: String,
 }
+
+#[derive(Debug, Serialize)]
+pub struct PolicyInfoResponse {
+    pub policy_count: usize,
+    pub last_reload_epoch_ms: u64,
+    pub schema_hash: String,
+}

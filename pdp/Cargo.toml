@@ -12,7 +12,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+notify = "7"
+sha2 = "0.10"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full", "test-util"] }
+tempfile = "3"

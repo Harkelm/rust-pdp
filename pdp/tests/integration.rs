@@ -16,6 +16,8 @@ async fn start_server() -> SocketAddr {
 
     let app = Router::new()
         .route("/v1/is_authorized", post(cedar_pdp::handlers::is_authorized))
+        .route("/v1/policy-info", get(cedar_pdp::handlers::policy_info))
+        .route("/admin/reload", post(cedar_pdp::handlers::admin_reload))
         .route("/health", get(cedar_pdp::handlers::health))
         .with_state(state);
 
@@ -43,6 +45,40 @@ async fn test_health() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
     assert!(body["policies_loaded"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn test_policy_info() {
+    let addr = start_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{addr}/v1/policy-info"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["policy_count"].as_u64().unwrap() > 0);
+    assert!(body["last_reload_epoch_ms"].as_u64().unwrap() > 0);
+    let hash = body["schema_hash"].as_str().unwrap();
+    assert_eq!(hash.len(), 64, "sha256 hex should be 64 chars");
+}
+
+#[tokio::test]
+async fn test_admin_reload() {
+    let addr = start_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{addr}/admin/reload"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["policy_count"].as_u64().unwrap() > 0);
+    assert!(body["last_reload_epoch_ms"].as_u64().unwrap() > 0);
 }
 
 #[tokio::test]
