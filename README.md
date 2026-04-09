@@ -57,7 +57,7 @@ projects/rust-pdp/
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, avp.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration, security, concurrency, policy_coverage, avp_compat, reload_resilience, etc. (163 tests)
+    tests/                  #   integration, security, concurrency, policy_coverage, avp_compat, reload_resilience, edge_cases, etc. (182 tests)
     benches/                #   cedar_eval.rs, hierarchy_depth.rs, avp_format_overhead.rs (Criterion benchmarks)
     examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
@@ -84,10 +84,10 @@ projects/rust-pdp/
 
 | Endpoint | Method | Auth | Purpose |
 |----------|--------|------|---------|
-| `/v1/is_authorized` | POST | None | Single authorization decision (native format) |
-| `/v1/batch_is_authorized` | POST | None | Batch authorization, max 100 (native format) |
-| `/avp/is-authorized` | POST | None | Single authorization (AVP wire format) |
-| `/avp/batch-is-authorized` | POST | None | Batch authorization, max 30 (AVP wire format) |
+| `/avp/is-authorized` | POST | None | Single authorization (AVP wire format -- primary API) |
+| `/avp/batch-is-authorized` | POST | None | Batch authorization, max 30 (AVP wire format -- primary API) |
+| `/v1/is_authorized` | POST | None | Single authorization (legacy format with JWT claims auto-construction) |
+| `/v1/batch_is_authorized` | POST | None | Batch authorization, max 100 (legacy format) |
 | `/v1/policy-info` | GET | None | Policy count, last reload time, schema hash |
 | `/admin/reload` | POST | Bearer `PDP_ADMIN_TOKEN` | Force policy reload from disk (rate-limited: 1 req/sec) |
 | `/healthz` | GET | None | Liveness probe (always 200 if process is up) |
@@ -98,19 +98,27 @@ All responses include:
 - `X-Request-Id` header (propagated from request or generated UUID v4)
 - `X-Policy-Epoch` header (millisecond timestamp of last policy reload -- plugins use this for cache key versioning)
 
-### AVP-Compatible Endpoints
+### API Format
 
-The `/avp/*` endpoints accept the same JSON wire format as Amazon Verified Permissions,
-allowing clients to swap between the self-hosted PDP and AVP without code changes.
+The PDP speaks the Amazon Verified Permissions (AVP) wire format. This is the
+primary API -- not a compatibility layer. Clients use the same JSON request/response
+format as AVP's `IsAuthorized` and `BatchIsAuthorized` operations. This enables
+portability: teams can swap between this self-hosted PDP and AWS AVP without
+changing client code.
 
-Key differences from native endpoints:
-- Entity references use `{ "entityType": "T", "entityId": "id" }` instead of Cedar UID strings
-- Context uses typed value wrappers: `{ "String": "foo" }`, `{ "Boolean": true }`, `{ "Long": 42 }`, `{ "Set": [...] }`, `{ "Record": {...} }`, `{ "EntityIdentifier": {...} }`
-- Entity hierarchy provided as explicit `entities.entityList` (not derived from JWT claims)
-- Decision is uppercase `ALLOW`/`DENY` (not `Allow`/`Deny`)
-- Policies returned as `determiningPolicies: [{ policyId }]` (not `diagnostics.reason`)
-- Batch endpoint enforces same-principal-or-same-resource homogeneity constraint (30-item limit)
-- `policyStoreId` is accepted but ignored (single-store deployment)
+Format details:
+- Entity references: `{ "entityType": "T", "entityId": "id" }`
+- Context: typed value wrappers (`{ "String": "foo" }`, `{ "Boolean": true }`, `{ "Long": 42 }`, `{ "Set": [...] }`, `{ "Record": {...} }`, `{ "EntityIdentifier": {...} }`)
+- Entity hierarchy: explicit `entities.entityList`
+- Decision: uppercase `ALLOW`/`DENY`
+- Determining policies: `determiningPolicies: [{ policyId }]`
+- Batch: same-principal-or-same-resource homogeneity constraint (30-item limit)
+- `policyStoreId`: accepted but ignored (single-store deployment)
+
+The `/v1/*` endpoints are a legacy format with JWT claims auto-construction --
+the PDP builds Cedar entities from JWT claims rather than requiring the caller
+to provide them. Whether entity construction belongs in the Kong plugin or the
+PDP is a design decision for the team (see ADR-005 Tier 1 vs Tier 2 resolution).
 
 See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analysis.
 
@@ -127,7 +135,7 @@ See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analy
 
 ```bash
 cd pdp && cargo test
-# Runs 163 tests: 34 unit, 16 avp_compat, 7 avp_stress, 88 integration/security/policy, 7 stress, 11 reload_resilience
+# Runs 182 tests: 34 unit, 16 avp_compat, 7 avp_stress, 19 edge_cases, 88 integration/security/policy, 7 stress, 11 reload_resilience
 ```
 
 ### Criterion Benchmarks
@@ -199,8 +207,8 @@ for what remains before production (Phase 1: 13-24 eng-days).
 
 **What works now:**
 - Rust PDP with Cedar policy evaluation, schema validation, hot-reload
-- Batch authorization endpoint (`/v1/batch_is_authorized`) with rayon parallel eval
-- AVP-compatible endpoints (`/avp/is-authorized`, `/avp/batch-is-authorized`) matching Amazon Verified Permissions wire format
+- AVP wire format API (`/avp/is-authorized`, `/avp/batch-is-authorized`) -- primary endpoints
+- Batch authorization with rayon parallel eval (4.5x speedup at 100 items)
 - Go and Lua Kong plugins with fail-closed semantics
 - Entity resolution from JWT claims (Tier 1)
 - Integration test harness (Docker Compose, 6 tests passing)
@@ -220,21 +228,20 @@ for what remains before production (Phase 1: 13-24 eng-days).
 - Configurable port via `PDP_PORT` env var (default 8180)
 - Non-root container user in production Dockerfile
 
-### AVP Compatibility Status
+### AVP API Status
 
-The authorization hot path is fully implemented and stress-tested. Clients can
-use `/avp/is-authorized` and `/avp/batch-is-authorized` with the same JSON
-request/response format as Amazon Verified Permissions. No code changes needed
-to swap between this PDP and AVP for authorization decisions.
+The authorization hot path is fully implemented and stress-tested. The PDP speaks
+the AVP wire format natively. No code changes needed to swap between this PDP and
+AWS AVP for authorization decisions.
 
 **Implemented (149 tests passing, stress-tested to c=2000):**
-- `IsAuthorized` -- single authorization with AVP wire format
+- `IsAuthorized` -- single authorization
 - `BatchIsAuthorized` -- batch authorization (30-item limit, homogeneity constraint)
-- AVP typed value wrappers (String, Boolean, Long, Set, Record, EntityIdentifier)
+- Typed value wrappers (String, Boolean, Long, Set, Record, EntityIdentifier)
 - Explicit entity hierarchy via `entities.entityList`
 - `policyStoreId` accepted (ignored in single-store deployment)
 - Fail-closed: malformed requests always produce DENY with error, never 500
-- Format overhead: +9 us constant per request (~42% on full path with 10 production policies; proportionally less with more policies)
+- Typed value parsing cost: +9 us constant per request (~42% of full eval path with 10 production policies; proportionally less with more policies)
 
 **Not implemented -- requires enterprise infrastructure decisions:**
 
@@ -306,21 +313,26 @@ permit (6.9us eval) vs Allow which must evaluate matching policies (9.6us+).
 At concurrency 500, Allow sustains 111K RPS (p99=18ms), Deny sustains 222K RPS
 (p99=8ms). The 5ms p99 budget is met up to concurrency ~100 for Allow requests.
 
-### AVP Format Overhead (In-Process, Criterion)
+### Typed Value Parsing Overhead (In-Process, Criterion)
 
-| Scenario | Native | AVP | Overhead |
-|----------|--------|-----|----------|
+The AVP format uses typed value wrappers (`{"String": "foo"}` instead of raw
+`"foo"`). This adds a fixed parsing cost per request. Benchmarked against a
+minimal format (raw Cedar UID strings, no typed wrappers) for reference:
+
+| Scenario | Minimal Format | AVP Format | Overhead |
+|----------|----------------|------------|----------|
 | Parse only (no eval) | 9.4 us | 18.1 us | +93% |
 | Full path (parse + eval) | 20.7 us | 29.3 us | +42% |
 | Response serialization | 52 ns | 53 ns | ~0% |
 | Batch 10 (sequential eval) | 205 us | 298 us | +45% |
 | Batch 30 (sequential eval) | 618 us | 900 us | +46% |
 
-The AVP parsing overhead (~9 us constant) comes from typed value wrapper
-deserialization and explicit entity construction. This is a fixed cost per
-request independent of policy count or Cedar evaluation time. At production
-policy counts (10+ policies, 10+ us eval), the overhead is <50% of total
-request time and shrinks proportionally as policy complexity grows.
+The ~9 us constant overhead comes from typed value wrapper deserialization and
+explicit entity construction. This is the cost of speaking the AVP format --
+fixed per request, independent of policy count or Cedar evaluation time. At
+production policy counts (10+ policies, 10+ us eval), it's <50% of total
+request time and shrinks proportionally as policy complexity grows. For context,
+the full AVP-format request round-trip at c=100 is still well under 5ms p99.
 
 ### AVP Stress Test Results (HTTP, localhost)
 

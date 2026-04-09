@@ -1,7 +1,8 @@
-//! AVP-compatible request/response types and Cedar translation layer.
+//! AVP wire format types and Cedar translation.
 //!
-//! Implements the Amazon Verified Permissions wire format for authorization
-//! endpoints. Translates between AVP JSON structures and Cedar SDK types.
+//! The AVP (Amazon Verified Permissions) format is the PDP's primary API format.
+//! This module defines the request/response types and translates between AVP JSON
+//! structures and Cedar SDK types for policy evaluation.
 
 use cedar_policy::{
     Context, Entities, Entity, EntityId, EntityTypeName, EntityUid, RestrictedExpression, Schema,

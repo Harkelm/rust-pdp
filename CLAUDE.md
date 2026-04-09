@@ -27,6 +27,7 @@ Go reference). Production Cedar policies in `policies/`.
 
 ## Key Decisions
 
+- **AVP format is primary**: `/avp/*` endpoints speak the Amazon Verified Permissions wire format natively. `/v1/*` is a legacy format with JWT claims auto-construction
 - **ADR-001**: Lua plugin (not Go) -- measured 27x IPC overhead at concurrency 100
 - **ADR-006**: Fail-closed, no FailOpen toggle. PDP error = 503+Retry-After, never 403
 - **ADR-005**: Tiered entity model (Tier 1: JWT identity, Tier 2: required attrs, Tier 3: hierarchy)
@@ -68,7 +69,7 @@ Multiple agents may work in this repo simultaneously. Safety rules:
 
 ```bash
 cd pdp
-cargo test                    # all unit + integration + stress tests (163 tests)
+cargo test                    # all unit + integration + stress tests (182 tests)
 cargo bench                   # all Criterion benchmarks
 cargo bench --bench cedar_eval  # specific benchmark group
 cargo run --example memory_scaling --release  # heap measurement

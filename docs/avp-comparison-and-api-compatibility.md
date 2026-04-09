@@ -17,9 +17,9 @@ could swap between self-hosted and managed AVP without changing client code, and
 surface is well-designed for authorization lifecycle management (policy CRUD, templates,
 identity sources, schema management).
 
-**Recommendation**: Implement an AVP-compatible API layer on top of the existing Cedar
-evaluation engine. This gives teams the managed-service API contract with self-hosted
-performance characteristics.
+**Recommendation**: The PDP speaks the AVP wire format as its primary API -- not a
+compatibility layer. This gives teams the managed-service API contract with self-hosted
+performance characteristics and enables transparent swap between self-hosted and AWS AVP.
 
 ---
 
