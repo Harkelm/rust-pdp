@@ -2,10 +2,9 @@ Handoff: Test Infrastructure Refactor
 ======================================
 
 Date: 2026-04-09
-Context: /simplify review of reload_resilience.rs surfaced broader test
-infrastructure duplication across all 12 integration test files.
+Status: COMPLETE
 
-## What was done this session
+## What was done
 
 1. Added pdp/tests/reload_resilience.rs (11 tests) -- filesystem fault
    tolerance during hot-reload.
@@ -15,55 +14,31 @@ infrastructure duplication across all 12 integration test files.
    - Extracted new_store() helper
    - Fixed misleading test name and doc comment
    - Removed redundant atomic counter and unused return value
+5. Extracted shared test utilities into tests/common/mod.rs:
+   - production_policy_dir() -- shared policy path construction
+   - start_server(policy_dir) -- standard route set server starter
+   - admin_allow_request(), viewer_deny_request(), suspended_deny_request()
+   - admin_claims(), viewer_claims()
+   - Updated 4 test files: stress.rs, reload_resilience.rs, concurrency.rs,
+     diagnostics.rs
 
-## Remaining: Shared test utility extraction
+## Remaining opportunities (not blocking)
 
-All 12 test files in pdp/tests/ independently define their own server
-startup functions and request builders. Three review agents identified
-this as the top simplification opportunity.
+### Further test utility extraction (integration.rs, security.rs)
 
-### Duplicated functions
+integration.rs and security.rs were not updated because their server starters
+have intentionally different route sets:
 
-| Function pattern        | Files that duplicate it                              |
-|-------------------------|------------------------------------------------------|
-| start_server()          | integration, concurrency, security, diagnostics,     |
-|                         | stress (x2 variants), reload_resilience              |
-| admin_allow_request()   | stress, reload_resilience (identical)                 |
-| viewer_deny_request()   | stress, reload_resilience (identical)                 |
-| suspended_deny_request()| stress only (but could be shared)                    |
-| admin_claims()          | diagnostics only (but could be shared)               |
-| viewer_claims()         | diagnostics only (but could be shared)               |
+- integration.rs: includes /v1/policy-info; start_claims_server omits
+  /admin/reload; start_server_with_epoch_header has middleware
+- security.rs: omits /admin/reload (intentional -- tests what happens when
+  admin endpoints are absent)
 
-### Recommended approach
-
-Create tests/common/mod.rs with:
-
-```rust
-// tests/common/mod.rs
-pub fn admin_allow_request() -> serde_json::Value { ... }
-pub fn viewer_deny_request() -> serde_json::Value { ... }
-pub fn suspended_deny_request() -> serde_json::Value { ... }
-pub fn admin_claims() -> serde_json::Value { ... }
-pub fn viewer_claims() -> serde_json::Value { ... }
-
-// Parameterized -- covers all current variants
-pub async fn start_server(policy_dir: PathBuf) -> SocketAddr { ... }
-pub async fn start_server_with_auth(policy_dir: PathBuf, token: &str) -> SocketAddr { ... }
-```
-
-Then in each test file: `mod common; use common::*;`
-
-The parameterized start_server() (taking policy_dir) covers both the
-"production policies" case (pass ../policies) and the "temp dir" case
-(pass a TempDir path). The auth variant adds the token parameter.
-
-### Scope
-
-- Touch 7 of 12 test files (the ones that define request builders or
-  server starters)
-- Net reduction: ~150-200 lines of duplicated code
-- Risk: low (pure refactor, no behavior change)
-- Verify: cargo test must show 163 tests passing afterward
+Their inline request builders (admin_allow_request, viewer_deny_request
+equivalents) could be replaced with common:: imports in a future pass.
+This would save ~60 more lines but is lower priority since the main
+duplication hotspot (stress + reload_resilience + concurrency) is already
+consolidated.
 
 ### What NOT to do
 
@@ -74,3 +49,7 @@ The parameterized start_server() (taking policy_dir) covers both the
   tests intentionally omit certain routes (security.rs omits /admin/reload,
   diagnostics.rs omits batch endpoint). A parameterized builder would
   over-engineer this.
+
+## Test count
+
+163 tests passing across all 12 test files + doc-tests.
