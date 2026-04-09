@@ -47,8 +47,8 @@ impl<'a> PolicyCache<'a> {
 impl PolicyStore {
     /// Load all .cedar files and .cedarschema files from a directory.
     pub fn from_dir(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let (policy_set, schema) = Self::load_from_dir(dir)?;
-        let schema_hash = Self::compute_schema_hash(&schema);
+        let (policy_set, schema, schema_src) = Self::load_from_dir(dir)?;
+        let schema_hash = Self::compute_schema_hash(&schema_src);
         let now = now_epoch_ms();
 
         Ok(Self {
@@ -76,9 +76,9 @@ impl PolicyStore {
     /// Attempt to reload policies from disk. Returns Ok(policy_count) on success.
     /// On validation failure, the existing policies remain active.
     pub fn reload(&self) -> Result<usize, Box<dyn std::error::Error>> {
-        let (policy_set, schema) = Self::load_from_dir(&self.policy_dir)?;
+        let (policy_set, schema, schema_src) = Self::load_from_dir(&self.policy_dir)?;
         let count = policy_set.policies().count();
-        let hash = Self::compute_schema_hash(&schema);
+        let hash = Self::compute_schema_hash(&schema_src);
 
         self.state.store(Arc::new((policy_set, schema)));
         self.schema_hash.store(Arc::new(hash));
@@ -100,13 +100,15 @@ impl PolicyStore {
         (**self.schema_hash.load()).clone()
     }
 
-    fn compute_schema_hash(schema: &Schema) -> String {
+    /// Hash the raw schema source text rather than the parsed Schema's Debug output.
+    /// Debug format is not stable across cedar-policy crate versions; source text is.
+    fn compute_schema_hash(schema_src: &str) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(format!("{:?}", schema));
+        hasher.update(schema_src.as_bytes());
         format!("{:x}", hasher.finalize())
     }
 
-    fn load_from_dir(dir: &Path) -> Result<(PolicySet, Schema), Box<dyn std::error::Error>> {
+    fn load_from_dir(dir: &Path) -> Result<(PolicySet, Schema, String), Box<dyn std::error::Error>> {
         let mut policy_src = String::new();
         let mut schema_src = String::new();
 
@@ -147,7 +149,7 @@ impl PolicyStore {
             return Err(format!("Policy validation failed: {}", errors.join("; ")).into());
         }
 
-        Ok((policy_set, schema))
+        Ok((policy_set, schema, schema_src))
     }
 
     /// Validate entities against schema before evaluation (P0-2).
