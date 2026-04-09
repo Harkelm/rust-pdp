@@ -58,6 +58,31 @@ pub async fn start_server(policy_dir: PathBuf) -> SocketAddr {
     addr
 }
 
+/// Start a test server with AVP endpoints using policies from `policy_dir`.
+pub async fn start_avp_server(policy_dir: PathBuf) -> SocketAddr {
+    let store =
+        cedar_pdp::policy::PolicyStore::from_dir(&policy_dir).expect("load policies");
+    let state: cedar_pdp::handlers::AppState =
+        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
+
+    let app = Router::new()
+        .route(
+            "/avp/is-authorized",
+            post(cedar_pdp::handlers::avp_is_authorized),
+        )
+        .route(
+            "/avp/batch-is-authorized",
+            post(cedar_pdp::handlers::avp_batch_is_authorized),
+        )
+        .route("/health", get(cedar_pdp::handlers::health))
+        .with_state(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    addr
+}
+
 // ---------------------------------------------------------------------------
 // Request builders
 // ---------------------------------------------------------------------------

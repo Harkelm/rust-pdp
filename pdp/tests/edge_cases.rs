@@ -9,17 +9,16 @@
 //! - Policy epoch monotonicity guarantees
 
 mod common;
-use common::{admin_allow_request, production_policy_dir, start_server, viewer_deny_request};
+use common::{
+    admin_allow_request, production_policy_dir, start_avp_server, start_server,
+    viewer_deny_request,
+};
 
 use std::fs;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use axum::routing::{get, post};
-use axum::Router;
 use tempfile::TempDir;
-use tokio::net::TcpListener;
 
 // ---------------------------------------------------------------------------
 // Empty policy set: all .cedar files removed, schema remains
@@ -188,13 +187,14 @@ fn schema_change_that_invalidates_existing_policy_rejected() {
 // Batch with 100 identical items: no deduplication, each evaluated independently
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn test_batch_100_identical_items_all_evaluated() {
-    let addr = start_server(production_policy_dir()).await;
+/// Helper: send 100 identical requests in a batch, assert all return expected decision.
+async fn assert_batch_100_identical(
+    addr: std::net::SocketAddr,
+    request_builder: fn() -> serde_json::Value,
+    expected: &str,
+) {
     let client = reqwest::Client::new();
-
-    // 100 identical admin-allow requests.
-    let requests: Vec<serde_json::Value> = (0..100).map(|_| admin_allow_request()).collect();
+    let requests: Vec<serde_json::Value> = (0..100).map(|_| request_builder()).collect();
 
     let resp = client
         .post(format!("http://{addr}/v1/batch_is_authorized"))
@@ -214,38 +214,22 @@ async fn test_batch_100_identical_items_all_evaluated() {
 
     for (i, r) in responses.iter().enumerate() {
         assert_eq!(
-            r["decision"], "Allow",
-            "item {i}: identical admin requests must all Allow"
+            r["decision"], expected,
+            "item {i}: expected {expected}"
         );
     }
 }
 
 #[tokio::test]
+async fn test_batch_100_identical_items_all_evaluated() {
+    let addr = start_server(production_policy_dir()).await;
+    assert_batch_100_identical(addr, admin_allow_request, "Allow").await;
+}
+
+#[tokio::test]
 async fn test_batch_100_identical_deny_items() {
     let addr = start_server(production_policy_dir()).await;
-    let client = reqwest::Client::new();
-
-    // 100 identical viewer-deny requests.
-    let requests: Vec<serde_json::Value> = (0..100).map(|_| viewer_deny_request()).collect();
-
-    let resp = client
-        .post(format!("http://{addr}/v1/batch_is_authorized"))
-        .json(&serde_json::json!({ "requests": requests }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let responses = body["responses"].as_array().unwrap();
-    assert_eq!(responses.len(), 100);
-
-    for (i, r) in responses.iter().enumerate() {
-        assert_eq!(
-            r["decision"], "Deny",
-            "item {i}: identical viewer-delete requests must all Deny"
-        );
-    }
+    assert_batch_100_identical(addr, viewer_deny_request, "Deny").await;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,27 +298,9 @@ async fn test_concurrent_admin_reload_rate_limiting() {
 // AVP with unknown action strings
 // ---------------------------------------------------------------------------
 
-async fn start_avp_server() -> SocketAddr {
-    let policy_path = production_policy_dir();
-    let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
-    let state: cedar_pdp::handlers::AppState =
-        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
-
-    let app = Router::new()
-        .route("/avp/is-authorized", post(cedar_pdp::handlers::avp_is_authorized))
-        .route("/avp/batch-is-authorized", post(cedar_pdp::handlers::avp_batch_is_authorized))
-        .route("/health", get(cedar_pdp::handlers::health))
-        .with_state(state);
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    addr
-}
-
 #[tokio::test]
 async fn test_avp_unknown_action_string_denied() {
-    let addr = start_avp_server().await;
+    let addr = start_avp_server(production_policy_dir()).await;
     let client = reqwest::Client::new();
 
     // AVP format allows arbitrary action strings. An action not in the schema
@@ -369,7 +335,7 @@ async fn test_avp_unknown_action_string_denied() {
 
 #[tokio::test]
 async fn test_avp_completely_invalid_action_type_denied() {
-    let addr = start_avp_server().await;
+    let addr = start_avp_server(production_policy_dir()).await;
     let client = reqwest::Client::new();
 
     // Entirely bogus action type namespace.
@@ -403,7 +369,7 @@ async fn test_avp_completely_invalid_action_type_denied() {
 
 #[tokio::test]
 async fn test_avp_empty_entity_id_denied() {
-    let addr = start_avp_server().await;
+    let addr = start_avp_server(production_policy_dir()).await;
     let client = reqwest::Client::new();
 
     let resp = client

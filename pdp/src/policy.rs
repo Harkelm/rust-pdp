@@ -47,8 +47,7 @@ impl<'a> PolicyCache<'a> {
 impl PolicyStore {
     /// Load all .cedar files and .cedarschema files from a directory.
     pub fn from_dir(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let (policy_set, schema, schema_src) = Self::load_from_dir(dir)?;
-        let schema_hash = Self::compute_schema_hash(&schema_src);
+        let (policy_set, schema, schema_hash) = Self::load_from_dir(dir)?;
         let now = now_epoch_ms();
 
         Ok(Self {
@@ -76,12 +75,11 @@ impl PolicyStore {
     /// Attempt to reload policies from disk. Returns Ok(policy_count) on success.
     /// On validation failure, the existing policies remain active.
     pub fn reload(&self) -> Result<usize, Box<dyn std::error::Error>> {
-        let (policy_set, schema, schema_src) = Self::load_from_dir(&self.policy_dir)?;
+        let (policy_set, schema, schema_hash) = Self::load_from_dir(&self.policy_dir)?;
         let count = policy_set.policies().count();
-        let hash = Self::compute_schema_hash(&schema_src);
 
         self.state.store(Arc::new((policy_set, schema)));
-        self.schema_hash.store(Arc::new(hash));
+        self.schema_hash.store(Arc::new(schema_hash));
         self.last_reload_epoch_ms
             .store(now_epoch_ms(), Ordering::Relaxed);
 
@@ -108,6 +106,9 @@ impl PolicyStore {
         format!("{:x}", hasher.finalize())
     }
 
+    /// Load policies, schema, and compute schema hash from source text.
+    /// Returns (PolicySet, Schema, schema_hash) -- the hash is computed from
+    /// the raw source text before parsing, so it's stable across cedar-policy versions.
     fn load_from_dir(dir: &Path) -> Result<(PolicySet, Schema, String), Box<dyn std::error::Error>> {
         let mut policy_src = String::new();
         let mut schema_src = String::new();
@@ -149,7 +150,8 @@ impl PolicyStore {
             return Err(format!("Policy validation failed: {}", errors.join("; ")).into());
         }
 
-        Ok((policy_set, schema, schema_src))
+        let schema_hash = Self::compute_schema_hash(&schema_src);
+        Ok((policy_set, schema, schema_hash))
     }
 
     /// Validate entities against schema before evaluation (P0-2).
