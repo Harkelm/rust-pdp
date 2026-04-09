@@ -57,8 +57,8 @@ projects/rust-pdp/
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, avp.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration, security, avp_security, admin_auth, concurrency, policy_coverage, avp_compat, reload_resilience, edge_cases, etc. (231 tests)
-    benches/                #   cedar_eval.rs, hierarchy_depth.rs, avp_format_overhead.rs (Criterion benchmarks)
+    tests/                  #   integration, security, avp_security, admin_auth, concurrency, policy_coverage, avp_compat, reload_resilience, edge_cases, policy_evolution, etc. (237 tests)
+    benches/                #   cedar_eval.rs, hierarchy_depth.rs, avp_format_overhead.rs, rayon_crossover.rs, etc. (8 Criterion benchmarks)
     examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
   kong-plugin-lua/          # Kong Lua plugin (ADR-001 Path A)
@@ -135,7 +135,7 @@ See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analy
 
 ```bash
 cd pdp && cargo test
-# Runs 231 tests: 34 unit, 16 avp_compat, 7 avp_stress, 42 avp_security, 7 admin_auth, 19 edge_cases, 88 integration/security/policy, 7 stress, 11 reload_resilience
+# Runs 237 tests: 36 unit, 16 avp_compat, 7 avp_stress, 42 avp_security, 7 admin_auth, 19 edge_cases, 88 integration/security/policy, 7 stress, 11 reload_resilience, 6 policy_evolution
 ```
 
 ### Criterion Benchmarks
@@ -456,6 +456,9 @@ cd benchmarks && bash cache_effectiveness.sh
 
 # Cache stampede simulation (Docker, ~5 min)
 cd benchmarks && bash stampede_sim.sh
+
+# Sustained load test -- p99 stability over 5+ minutes
+cd benchmarks && bash sustained_load.sh
 ```
 
 Hardware note: Run benchmarks with no background load. On Linux, use

@@ -53,5 +53,9 @@ harness = false
 name = "avp_format_overhead"
 harness = false
 
+[[bench]]
+name = "rayon_crossover"
+harness = false
+
 [[example]]
 name = "memory_scaling"
