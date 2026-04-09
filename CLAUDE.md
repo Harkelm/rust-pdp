@@ -14,7 +14,7 @@ Go reference). Production Cedar policies in `policies/`.
 
 | Path | Purpose |
 |------|---------|
-| `pdp/src/` | Rust PDP service (main, handlers, policy, entities, models) |
+| `pdp/src/` | Rust PDP service (main, handlers, avp, policy, entities, models) |
 | `pdp/tests/` | Integration tests (security, policy coverage, concurrency, etc.) |
 | `pdp/benches/` | Criterion benchmarks (cedar eval, batch throughput, entity construction, reload contention) |
 | `policies/` | Production Cedar policies + schema |
@@ -68,7 +68,7 @@ Multiple agents may work in this repo simultaneously. Safety rules:
 
 ```bash
 cd pdp
-cargo test                    # all unit + integration + stress tests (103 tests)
+cargo test                    # all unit + integration + stress tests (142 tests)
 cargo bench                   # all Criterion benchmarks
 cargo bench --bench cedar_eval  # specific benchmark group
 cargo run --example memory_scaling --release  # heap measurement

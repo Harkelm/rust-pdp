@@ -321,7 +321,8 @@ pub async fn avp_is_authorized(
 ) -> Result<Json<avp::AvpIsAuthorizedResponse>, (StatusCode, Json<ErrorResponse>)> {
     let state = ctx.load();
     let (policy_set, schema) = state.as_ref();
-    Ok(Json(evaluate_avp_single(&req, policy_set, schema)))
+    let authorizer = Authorizer::new();
+    Ok(Json(evaluate_avp_single(&authorizer, &req, policy_set, schema)))
 }
 
 /// Batch authorization using the Amazon Verified Permissions wire format.
@@ -365,7 +366,7 @@ pub async fn avp_batch_is_authorized(
                             action: item.action.clone(),
                             resource: item.resource.clone(),
                         },
-                        decision: "DENY".to_string(),
+                        decision: avp::DECISION_DENY.to_string(),
                         determining_policies: vec![],
                         errors: vec![avp::AvpError {
                             error_description: msg.clone(),
@@ -375,16 +376,17 @@ pub async fn avp_batch_is_authorized(
             }
         };
 
+        let authorizer = Authorizer::new();
         if requests.len() < RAYON_THRESHOLD {
             requests
                 .iter()
-                .map(|item| evaluate_avp_batch_item(item, policy_set, schema, &entities))
+                .map(|item| evaluate_avp_batch_item(&authorizer, item, policy_set, schema, &entities))
                 .collect()
         } else {
             use rayon::prelude::*;
             requests
                 .par_iter()
-                .map(|item| evaluate_avp_batch_item(item, policy_set, schema, &entities))
+                .map(|item| evaluate_avp_batch_item(&authorizer, item, policy_set, schema, &entities))
                 .collect()
         }
     })
@@ -403,14 +405,15 @@ pub async fn avp_batch_is_authorized(
 
 /// Evaluate a single AVP-format authorization request.
 fn evaluate_avp_single(
+    authorizer: &Authorizer,
     req: &avp::AvpIsAuthorizedRequest,
     policy_set: &PolicySet,
     schema: &Schema,
 ) -> avp::AvpIsAuthorizedResponse {
-    match evaluate_avp_single_inner(req, policy_set, schema) {
+    match evaluate_avp_single_inner(authorizer, req, policy_set, schema) {
         Ok(resp) => resp,
         Err(msg) => avp::AvpIsAuthorizedResponse {
-            decision: "DENY".to_string(),
+            decision: avp::DECISION_DENY.to_string(),
             determining_policies: vec![],
             errors: vec![avp::AvpError {
                 error_description: msg,
@@ -420,6 +423,7 @@ fn evaluate_avp_single(
 }
 
 fn evaluate_avp_single_inner(
+    authorizer: &Authorizer,
     req: &avp::AvpIsAuthorizedRequest,
     policy_set: &PolicySet,
     schema: &Schema,
@@ -433,7 +437,6 @@ fn evaluate_avp_single_inner(
     let cedar_request = Request::new(principal, action, resource, context, Some(schema))
         .map_err(|e| format!("invalid request: {e}"))?;
 
-    let authorizer = Authorizer::new();
     let response = authorizer.is_authorized(&cedar_request, policy_set, &entities);
 
     Ok(build_avp_response(&response))
@@ -441,6 +444,7 @@ fn evaluate_avp_single_inner(
 
 /// Evaluate a single item within an AVP batch (shared entities).
 fn evaluate_avp_batch_item(
+    authorizer: &Authorizer,
     item: &avp::AvpBatchItem,
     policy_set: &PolicySet,
     schema: &Schema,
@@ -461,7 +465,6 @@ fn evaluate_avp_batch_item(
         let cedar_request = Request::new(principal, action, resource, context, Some(schema))
             .map_err(|e| format!("invalid request: {e}"))?;
 
-        let authorizer = Authorizer::new();
         let response = authorizer.is_authorized(&cedar_request, policy_set, entities);
 
         Ok(build_avp_response(&response))
@@ -476,7 +479,7 @@ fn evaluate_avp_batch_item(
         },
         Err(msg) => avp::AvpBatchResult {
             request: echo,
-            decision: "DENY".to_string(),
+            decision: avp::DECISION_DENY.to_string(),
             determining_policies: vec![],
             errors: vec![avp::AvpError {
                 error_description: msg,
@@ -488,8 +491,8 @@ fn evaluate_avp_batch_item(
 /// Map a Cedar authorization response to AVP response fields.
 fn build_avp_response(response: &cedar_policy::Response) -> avp::AvpIsAuthorizedResponse {
     let decision = match response.decision() {
-        Decision::Allow => "ALLOW",
-        Decision::Deny => "DENY",
+        Decision::Allow => avp::DECISION_ALLOW,
+        Decision::Deny => avp::DECISION_DENY,
     };
 
     let determining_policies = response

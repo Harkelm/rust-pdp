@@ -8,8 +8,8 @@ use cedar_policy::{
     Authorizer, Context, Entities, Entity, EntityId, EntityTypeName, EntityUid, PolicySet, Request,
     RestrictedExpression, Schema,
 };
+use cedar_pdp::avp;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -72,8 +72,6 @@ fn parse_native(json: &Value, schema: &Schema) -> (EntityUid, EntityUid, EntityU
     let sub = claims["sub"].as_str().unwrap();
     let principal = make_uid("ApiGateway::User", sub);
     let action = make_uid("ApiGateway::Action", "read");
-    let resource_path = json["resource"].as_str().unwrap();
-    // Extract path from Cedar UID string
     let resource = make_uid("ApiGateway::ApiResource", "/api/v1/users");
 
     // Build entities from claims (simplified version of entities.rs build_entities)
@@ -192,118 +190,15 @@ fn avp_format_request() -> Value {
     })
 }
 
-// -- AVP format types for deserialization ---------------------------------
-
-#[derive(Debug, Deserialize)]
-struct AvpEntityIdentifier {
-    #[serde(alias = "EntityType", alias = "entityType")]
-    entity_type: String,
-    #[serde(alias = "EntityId", alias = "entityId")]
-    entity_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AvpEntity {
-    #[serde(alias = "Identifier")]
-    identifier: AvpEntityIdentifier,
-    #[serde(alias = "Attributes", default)]
-    attributes: HashMap<String, Value>,
-    #[serde(alias = "Parents", default)]
-    parents: Vec<AvpEntityIdentifier>,
-}
-
-/// Parse AVP typed value wrappers into Cedar RestrictedExpression.
-fn parse_avp_typed_value(val: &Value) -> Result<RestrictedExpression, String> {
-    if let Some(obj) = val.as_object() {
-        if let Some(s) = obj.get("String") {
-            return Ok(RestrictedExpression::new_string(
-                s.as_str().ok_or("String value must be string")?.to_string(),
-            ));
-        }
-        if let Some(b) = obj.get("Boolean") {
-            return Ok(RestrictedExpression::new_bool(
-                b.as_bool().ok_or("Boolean value must be bool")?,
-            ));
-        }
-        if let Some(n) = obj.get("Long") {
-            return Ok(RestrictedExpression::new_long(
-                n.as_i64().ok_or("Long value must be integer")?,
-            ));
-        }
-        if let Some(set) = obj.get("Set") {
-            let items: Vec<RestrictedExpression> = set
-                .as_array()
-                .ok_or("Set value must be array")?
-                .iter()
-                .map(|v| parse_avp_typed_value(v))
-                .collect::<Result<Vec<_>, _>>()?;
-            return Ok(RestrictedExpression::new_set(items));
-        }
-        if let Some(rec) = obj.get("Record") {
-            let fields: Vec<(String, RestrictedExpression)> = rec
-                .as_object()
-                .ok_or("Record value must be object")?
-                .iter()
-                .map(|(k, v)| parse_avp_typed_value(v).map(|expr| (k.clone(), expr)))
-                .collect::<Result<Vec<_>, _>>()?;
-            return RestrictedExpression::new_record(fields).map_err(|e| e.to_string());
-        }
-        if let Some(eid) = obj.get("EntityIdentifier") {
-            let id: AvpEntityIdentifier =
-                serde_json::from_value(eid.clone()).map_err(|e| e.to_string())?;
-            let uid = make_uid(&id.entity_type, &id.entity_id);
-            return Ok(RestrictedExpression::new_entity_uid(uid));
-        }
-    }
-    Err(format!("unrecognized AVP typed value: {val}"))
-}
-
-/// Parse AVP-format JSON into Cedar types.
+/// Parse AVP-format JSON into Cedar types using the library's avp module.
 fn parse_avp(json: &Value, schema: &Schema) -> (EntityUid, EntityUid, EntityUid, Entities, Context) {
-    let p = json.get("principal").unwrap();
-    let principal = make_uid(
-        p["entityType"].as_str().unwrap(),
-        p["entityId"].as_str().unwrap(),
-    );
+    let req: avp::AvpIsAuthorizedRequest = serde_json::from_value(json.clone()).unwrap();
 
-    let a = json.get("action").unwrap();
-    let action = make_uid(
-        a["actionType"].as_str().unwrap(),
-        a["actionId"].as_str().unwrap(),
-    );
-
-    let r = json.get("resource").unwrap();
-    let resource = make_uid(
-        r["entityType"].as_str().unwrap(),
-        r["entityId"].as_str().unwrap(),
-    );
-
-    // Parse entities from AVP entity list
-    let entity_list = json["entities"]["entityList"].as_array().unwrap();
-    let mut cedar_entities = Vec::new();
-
-    for avp_entity_val in entity_list {
-        let avp: AvpEntity = serde_json::from_value(avp_entity_val.clone()).unwrap();
-        let uid = make_uid(&avp.identifier.entity_type, &avp.identifier.entity_id);
-
-        let mut parents = HashSet::new();
-        for parent in &avp.parents {
-            parents.insert(make_uid(&parent.entity_type, &parent.entity_id));
-        }
-
-        if avp.attributes.is_empty() {
-            cedar_entities.push(Entity::new_no_attrs(uid, parents));
-        } else {
-            let mut attrs = HashMap::new();
-            for (key, val) in &avp.attributes {
-                attrs.insert(key.clone(), parse_avp_typed_value(val).unwrap());
-            }
-            cedar_entities.push(Entity::new(uid, attrs, parents).unwrap());
-        }
-    }
-
-    let entities = Entities::from_entities(cedar_entities, Some(schema)).unwrap();
-    let context = Context::empty();
+    let principal = avp::entity_ref_to_uid(&req.principal).unwrap();
+    let action = avp::action_ref_to_uid(&req.action).unwrap();
+    let resource = avp::entity_ref_to_uid(&req.resource).unwrap();
+    let entities = avp::build_cedar_entities(&req.entities, Some(schema)).unwrap();
+    let context = avp::build_cedar_context(&req.context).unwrap();
 
     (principal, action, resource, entities, context)
 }

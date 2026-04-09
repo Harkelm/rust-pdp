@@ -56,9 +56,9 @@ projects/rust-pdp/
     agent-reviews/          # Independent code reviews (tech-lead, field-agent)
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
-    src/                    #   main.rs, handlers.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration, security, concurrency, policy_coverage, etc. (96 tests)
-    benches/                #   cedar_eval.rs, hierarchy_depth.rs (Criterion benchmarks)
+    src/                    #   main.rs, handlers.rs, avp.rs, policy.rs, entities.rs, models.rs
+    tests/                  #   integration, security, concurrency, policy_coverage, avp_compat, etc. (142 tests)
+    benches/                #   cedar_eval.rs, hierarchy_depth.rs, avp_format_overhead.rs (Criterion benchmarks)
     examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
   kong-plugin-lua/          # Kong Lua plugin (ADR-001 Path A)
@@ -84,8 +84,10 @@ projects/rust-pdp/
 
 | Endpoint | Method | Auth | Purpose |
 |----------|--------|------|---------|
-| `/v1/is_authorized` | POST | None | Single authorization decision |
-| `/v1/batch_is_authorized` | POST | None | Batch authorization (max 100, rayon parallel) |
+| `/v1/is_authorized` | POST | None | Single authorization decision (native format) |
+| `/v1/batch_is_authorized` | POST | None | Batch authorization, max 100 (native format) |
+| `/avp/is-authorized` | POST | None | Single authorization (AVP wire format) |
+| `/avp/batch-is-authorized` | POST | None | Batch authorization, max 30 (AVP wire format) |
 | `/v1/policy-info` | GET | None | Policy count, last reload time, schema hash |
 | `/admin/reload` | POST | Bearer `PDP_ADMIN_TOKEN` | Force policy reload from disk |
 | `/healthz` | GET | None | Liveness probe (always 200 if process is up) |
@@ -93,6 +95,22 @@ projects/rust-pdp/
 | `/health` | GET | None | Backward-compat alias for `/readyz` |
 
 All responses include an `X-Request-Id` header (propagated from request or generated UUID v4).
+
+### AVP-Compatible Endpoints
+
+The `/avp/*` endpoints accept the same JSON wire format as Amazon Verified Permissions,
+allowing clients to swap between the self-hosted PDP and AVP without code changes.
+
+Key differences from native endpoints:
+- Entity references use `{ "entityType": "T", "entityId": "id" }` instead of Cedar UID strings
+- Context uses typed value wrappers: `{ "String": "foo" }`, `{ "Boolean": true }`, `{ "Long": 42 }`, `{ "Set": [...] }`, `{ "Record": {...} }`, `{ "EntityIdentifier": {...} }`
+- Entity hierarchy provided as explicit `entities.entityList` (not derived from JWT claims)
+- Decision is uppercase `ALLOW`/`DENY` (not `Allow`/`Deny`)
+- Policies returned as `determiningPolicies: [{ policyId }]` (not `diagnostics.reason`)
+- Batch endpoint enforces same-principal-or-same-resource homogeneity constraint (30-item limit)
+- `policyStoreId` is accepted but ignored (single-store deployment)
+
+See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analysis.
 
 ## Running
 
@@ -107,7 +125,7 @@ All responses include an `X-Request-Id` header (propagated from request or gener
 
 ```bash
 cd pdp && cargo test
-# Runs 103 tests: 11 unit, 85 integration, 7 stress
+# Runs 142 tests: 34 unit, 16 avp_compat, 85 integration/security/policy, 7 stress
 ```
 
 ### Criterion Benchmarks
@@ -180,6 +198,7 @@ for what remains before production (Phase 1: 13-24 eng-days).
 **What works now:**
 - Rust PDP with Cedar policy evaluation, schema validation, hot-reload
 - Batch authorization endpoint (`/v1/batch_is_authorized`) with rayon parallel eval
+- AVP-compatible endpoints (`/avp/is-authorized`, `/avp/batch-is-authorized`) matching Amazon Verified Permissions wire format
 - Go and Lua Kong plugins with fail-closed semantics
 - Entity resolution from JWT claims (Tier 1)
 - Integration test harness (Docker Compose, 6 tests passing)

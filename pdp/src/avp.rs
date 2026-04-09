@@ -13,6 +13,9 @@ use std::str::FromStr;
 /// Maximum recursion depth for parsing nested typed values (Sets, Records).
 const MAX_TYPED_VALUE_DEPTH: u32 = 32;
 
+pub const DECISION_ALLOW: &str = "ALLOW";
+pub const DECISION_DENY: &str = "DENY";
+
 // ---------------------------------------------------------------------------
 // Request types
 // ---------------------------------------------------------------------------
@@ -149,16 +152,12 @@ pub struct AvpError {
 
 /// Convert an AVP entity reference to a Cedar EntityUid.
 pub fn entity_ref_to_uid(r: &AvpEntityRef) -> Result<EntityUid, String> {
-    let tn = EntityTypeName::from_str(&r.entity_type)
-        .map_err(|e| format!("invalid entity type '{}': {e}", r.entity_type))?;
-    Ok(EntityUid::from_type_name_and_id(tn, EntityId::new(&r.entity_id)))
+    make_uid(&r.entity_type, &r.entity_id)
 }
 
 /// Convert an AVP action reference to a Cedar EntityUid.
 pub fn action_ref_to_uid(r: &AvpActionRef) -> Result<EntityUid, String> {
-    let tn = EntityTypeName::from_str(&r.action_type)
-        .map_err(|e| format!("invalid action type '{}': {e}", r.action_type))?;
-    Ok(EntityUid::from_type_name_and_id(tn, EntityId::new(&r.action_id)))
+    make_uid(&r.action_type, &r.action_id)
 }
 
 /// Parse an AVP typed value wrapper into a Cedar RestrictedExpression.
@@ -393,10 +392,15 @@ pub fn validate_batch_homogeneity(requests: &[AvpBatchItem]) -> Result<(), Strin
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Build a Cedar EntityUid from type name and id strings.
+fn make_uid(entity_type: &str, entity_id: &str) -> Result<EntityUid, String> {
+    let tn = EntityTypeName::from_str(entity_type)
+        .map_err(|e| format!("invalid entity type '{entity_type}': {e}"))?;
+    Ok(EntityUid::from_type_name_and_id(tn, EntityId::new(entity_id)))
+}
+
 fn identifier_to_uid(id: &AvpEntityIdentifier) -> Result<EntityUid, String> {
-    let tn = EntityTypeName::from_str(&id.entity_type)
-        .map_err(|e| format!("invalid entity type '{}': {e}", id.entity_type))?;
-    Ok(EntityUid::from_type_name_and_id(tn, EntityId::new(&id.entity_id)))
+    make_uid(&id.entity_type, &id.entity_id)
 }
 
 // ---------------------------------------------------------------------------
