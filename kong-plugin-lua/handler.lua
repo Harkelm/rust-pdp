@@ -17,12 +17,18 @@ local CedarAuthHandler = {
 }
 
 -- Decision cache (ADR-003 mandatory plugin-side decision cache).
--- Per-worker in-memory cache with TTL expiry. Key: principal|action|resource.
+-- Per-worker in-memory cache with TTL expiry.
+-- Key: principal|action|resource|epoch (epoch from X-Policy-Epoch header).
 -- Only Allow/Deny decisions are cached; errors/timeouts are never cached.
 local decision_cache = {}
 
+-- Current policy epoch from PDP, used for cache key versioning (RT-26 P1 #8).
+-- Updated from each PDP response. When policies reload, epoch changes and
+-- stale cached decisions naturally miss.
+local current_policy_epoch = ""
+
 local function cache_key(principal, action, resource)
-  return principal .. "|" .. action .. "|" .. resource
+  return principal .. "|" .. action .. "|" .. resource .. "|" .. current_policy_epoch
 end
 
 local function cache_lookup(key)
@@ -37,10 +43,17 @@ local function cache_lookup(key)
   return entry.decision
 end
 
+-- Apply +/-20% jitter to TTL to prevent cache stampede on simultaneous
+-- expiry (RT-26 P1 #9). Without jitter, all entries created in the same
+-- window expire simultaneously, causing a burst of PDP requests.
+local function jittered_ttl(ttl_seconds)
+  return ttl_seconds * (0.8 + math.random() * 0.4)
+end
+
 local function cache_store(key, decision, ttl_seconds)
   decision_cache[key] = {
     decision = decision,
-    expiry = ngx.now() + ttl_seconds,
+    expiry = ngx.now() + jittered_ttl(ttl_seconds),
   }
 end
 
@@ -175,6 +188,16 @@ function CedarAuthHandler:access(conf)
     return kong.response.exit(503, { message = "authorization service unavailable" },
       { ["Retry-After"] = "5" })
   end
+
+  -- Update policy epoch from PDP response for cache key versioning (RT-26 P1 #8).
+  local new_epoch = res.headers and res.headers["X-Policy-Epoch"]
+  if new_epoch and new_epoch ~= "" then
+    current_policy_epoch = new_epoch
+  end
+
+  -- Rebuild cache key with updated epoch (may differ from lookup key if
+  -- policies were reloaded between lookup and PDP call).
+  key = cache_key(principal, action, resource)
 
   local decision = response.decision
   local cache_ttl = (conf.cache_ttl_ms or 30000) / 1000

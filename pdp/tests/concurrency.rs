@@ -126,7 +126,8 @@ async fn test_reload_during_concurrent_eval() {
         handles.push(handle);
     }
 
-    // Concurrent reloads
+    // Concurrent reloads -- some may be rate-limited (429) which is correct.
+    // The test verifies no panics/500s, not that all reloads succeed.
     for i in 0..5 {
         let client = client.clone();
         let handle = tokio::spawn(async move {
@@ -135,12 +136,18 @@ async fn test_reload_during_concurrent_eval() {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(resp.status(), 200, "reload {i} must succeed");
-            let body: serde_json::Value = resp.json().await.unwrap();
+            let status = resp.status().as_u16();
             assert!(
-                body["policy_count"].as_u64().unwrap() > 0,
-                "reload {i}: must return non-zero policy count"
+                status == 200 || status == 429,
+                "reload {i}: expected 200 or 429, got {status}"
             );
+            if status == 200 {
+                let body: serde_json::Value = resp.json().await.unwrap();
+                assert!(
+                    body["policy_count"].as_u64().unwrap() > 0,
+                    "reload {i}: must return non-zero policy count"
+                );
+            }
         });
         handles.push(handle);
     }

@@ -58,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/avp/is-authorized", post(handlers::avp_is_authorized))
         .route("/avp/batch-is-authorized", post(handlers::avp_batch_is_authorized))
         .layer(middleware::from_fn(handlers::request_id_layer))
+        .layer(middleware::from_fn_with_state(ctx.clone(), handlers::policy_epoch_layer))
         .with_state(ctx.clone());
 
     // Start file watcher AFTER building router but BEFORE serving.

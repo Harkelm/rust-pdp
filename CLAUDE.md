@@ -68,7 +68,7 @@ Multiple agents may work in this repo simultaneously. Safety rules:
 
 ```bash
 cd pdp
-cargo test                    # all unit + integration + stress tests (142 tests)
+cargo test                    # all unit + integration + stress tests (152 tests)
 cargo bench                   # all Criterion benchmarks
 cargo bench --bench cedar_eval  # specific benchmark group
 cargo run --example memory_scaling --release  # heap measurement

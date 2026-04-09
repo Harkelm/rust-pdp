@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -21,11 +23,20 @@ use crate::policy::PolicyStore;
 pub struct AppContext {
     store: PolicyStore,
     admin_token: Option<String>,
+    last_admin_reload_ms: AtomicU64,
 }
+
+/// Minimum interval between admin-triggered reloads (milliseconds).
+/// Prevents DoS via continuous POST /admin/reload.
+const MIN_RELOAD_INTERVAL_MS: u64 = 1000;
 
 impl AppContext {
     pub fn new(store: PolicyStore, admin_token: Option<String>) -> Self {
-        Self { store, admin_token }
+        Self {
+            store,
+            admin_token,
+            last_admin_reload_ms: AtomicU64::new(0),
+        }
     }
 }
 
@@ -106,9 +117,24 @@ pub async fn admin_reload(
     // If no admin token configured, allow unrestricted (dev mode).
     // main.rs logs a warning at startup when this is the case.
 
+    // Rate-limit: reject if last admin reload was less than MIN_RELOAD_INTERVAL_MS ago.
+    let now_ms = now_epoch_ms();
+    let last = ctx.last_admin_reload_ms.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(last) < MIN_RELOAD_INTERVAL_MS {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorResponse {
+                error: format!(
+                    "reload rate limited, minimum interval: {MIN_RELOAD_INTERVAL_MS}ms"
+                ),
+            }),
+        ));
+    }
+
     let old_count = ctx.policy_count();
     match ctx.reload() {
         Ok(new_count) => {
+            ctx.last_admin_reload_ms.store(now_ms, Ordering::Relaxed);
             tracing::info!(old_count, new_count, "manual policy reload successful");
             Ok(Json(PolicyInfoResponse {
                 policy_count: new_count,
@@ -270,7 +296,9 @@ fn evaluate_single_inner(
     let cedar_request = Request::new(principal, action, resource, context, Some(schema))
         .map_err(|e| format!("invalid request: {e}"))?;
 
+    let start = Instant::now();
     let response = authorizer.is_authorized(&cedar_request, policy_set, &entities);
+    let eval_us = start.elapsed().as_micros() as u64;
 
     let decision = match response.decision() {
         Decision::Allow => "Allow",
@@ -289,6 +317,31 @@ fn evaluate_single_inner(
         .map(|e| e.to_string())
         .collect();
 
+    // Decision audit log (RT-26 P1 finding #7).
+    tracing::info!(
+        principal = %req.principal,
+        action = %req.action,
+        resource = %req.resource,
+        decision,
+        determining_policies = ?reason,
+        eval_us,
+        "authorization decision"
+    );
+
+    // Skip-on-error detection (RT-26 P0 finding #3).
+    // Cedar skips policies that error on attribute access. If a forbid policy
+    // is skipped, a permit can fire -- producing Allow when it should be Deny.
+    if !errors.is_empty() {
+        tracing::warn!(
+            principal = %req.principal,
+            action = %req.action,
+            resource = %req.resource,
+            decision,
+            errors = ?errors,
+            "policies skipped due to evaluation errors -- potential forbid bypass"
+        );
+    }
+
     Ok(AuthzResponse {
         decision: decision.to_string(),
         diagnostics: Diagnostics { reason, errors },
@@ -299,6 +352,33 @@ fn evaluate_single_inner(
 fn parse_entity_uid(s: &str) -> Result<EntityUid, String> {
     s.parse::<EntityUid>()
         .map_err(|e| format!("invalid entity UID: {s} ({e})"))
+}
+
+// ---------------------------------------------------------------------------
+// Policy epoch middleware
+// ---------------------------------------------------------------------------
+
+/// Middleware that adds X-Policy-Epoch header to every response.
+/// Plugins use this to version cache keys -- when policies reload, the epoch
+/// changes and stale cached decisions naturally miss (RT-26 P1 finding #8).
+pub async fn policy_epoch_layer(
+    State(ctx): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut resp = next.run(req).await;
+    let epoch = ctx.last_reload_epoch_ms().to_string();
+    if let Ok(val) = epoch.parse() {
+        resp.headers_mut().insert("x-policy-epoch", val);
+    }
+    resp
+}
+
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
 
 fn bad_request(msg: &str) -> (StatusCode, Json<ErrorResponse>) {

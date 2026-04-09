@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -56,11 +57,30 @@ type cacheEntry struct {
 var (
 	cacheMu sync.RWMutex
 	cache   = make(map[string]cacheEntry)
+
+	// Current policy epoch from PDP, used for cache key versioning (RT-26 P1 #8).
+	// Updated from each PDP response. When policies reload, epoch changes and
+	// stale cached decisions naturally miss.
+	policyEpochMu sync.RWMutex
+	policyEpoch   string
 )
 
-// cacheKey builds a lookup key from the PARC triple.
+func getPolicyEpoch() string {
+	policyEpochMu.RLock()
+	defer policyEpochMu.RUnlock()
+	return policyEpoch
+}
+
+func setPolicyEpoch(epoch string) {
+	policyEpochMu.Lock()
+	policyEpoch = epoch
+	policyEpochMu.Unlock()
+}
+
+// cacheKey builds a lookup key from the PARC triple + policy epoch.
+// Including epoch ensures stale decisions miss after policy reload (RT-26 P1 #8).
 func cacheKey(principal, action, resource string) string {
-	return principal + "|" + action + "|" + resource
+	return principal + "|" + action + "|" + resource + "|" + getPolicyEpoch()
 }
 
 // cacheLookup returns the cached decision if present and not expired.
@@ -74,11 +94,18 @@ func cacheLookup(key string) (string, bool) {
 	return entry.decision, true
 }
 
-// cacheStore saves a decision with the given TTL. Only Allow/Deny are cached;
+// jitteredTTL applies +/-20% randomization to prevent cache stampede on
+// simultaneous expiry (RT-26 P1 #9).
+func jitteredTTL(ttl time.Duration) time.Duration {
+	jitter := 0.8 + rand.Float64()*0.4
+	return time.Duration(float64(ttl) * jitter)
+}
+
+// cacheStore saves a decision with jittered TTL. Only Allow/Deny are cached;
 // errors and transient failures must never be cached.
 func cacheStore(key, decision string, ttl time.Duration) {
 	cacheMu.Lock()
-	cache[key] = cacheEntry{decision: decision, expiry: time.Now().Add(ttl)}
+	cache[key] = cacheEntry{decision: decision, expiry: time.Now().Add(jitteredTTL(ttl))}
 	cacheMu.Unlock()
 }
 
@@ -286,6 +313,14 @@ func (conf *Config) Access(kong *pdk.PDK) {
 		exit503(kong)
 		return
 	}
+
+	// Update policy epoch from PDP response for cache key versioning (RT-26 P1 #8).
+	if newEpoch := resp.Header.Get("X-Policy-Epoch"); newEpoch != "" {
+		setPolicyEpoch(newEpoch)
+	}
+	// Rebuild cache key with updated epoch (may differ from lookup key if
+	// policies were reloaded between lookup and PDP call).
+	key = cacheKey(principal, action, resource)
 
 	// Compute cache TTL from config.
 	cacheTtlMs := conf.CacheTtlMs

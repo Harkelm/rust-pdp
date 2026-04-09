@@ -57,7 +57,7 @@ projects/rust-pdp/
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, avp.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration, security, concurrency, policy_coverage, avp_compat, etc. (142 tests)
+    tests/                  #   integration, security, concurrency, policy_coverage, avp_compat, etc. (152 tests)
     benches/                #   cedar_eval.rs, hierarchy_depth.rs, avp_format_overhead.rs (Criterion benchmarks)
     examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
@@ -89,12 +89,14 @@ projects/rust-pdp/
 | `/avp/is-authorized` | POST | None | Single authorization (AVP wire format) |
 | `/avp/batch-is-authorized` | POST | None | Batch authorization, max 30 (AVP wire format) |
 | `/v1/policy-info` | GET | None | Policy count, last reload time, schema hash |
-| `/admin/reload` | POST | Bearer `PDP_ADMIN_TOKEN` | Force policy reload from disk |
+| `/admin/reload` | POST | Bearer `PDP_ADMIN_TOKEN` | Force policy reload from disk (rate-limited: 1 req/sec) |
 | `/healthz` | GET | None | Liveness probe (always 200 if process is up) |
 | `/readyz` | GET | None | Readiness probe (200 when policies loaded) |
 | `/health` | GET | None | Backward-compat alias for `/readyz` |
 
-All responses include an `X-Request-Id` header (propagated from request or generated UUID v4).
+All responses include:
+- `X-Request-Id` header (propagated from request or generated UUID v4)
+- `X-Policy-Epoch` header (millisecond timestamp of last policy reload -- plugins use this for cache key versioning)
 
 ### AVP-Compatible Endpoints
 
@@ -125,7 +127,7 @@ See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analy
 
 ```bash
 cd pdp && cargo test
-# Runs 149 tests: 34 unit, 16 avp_compat, 7 avp_stress, 85 integration/security/policy, 7 stress
+# Runs 152 tests: 34 unit, 16 avp_compat, 7 avp_stress, 88 integration/security/policy, 7 stress
 ```
 
 ### Criterion Benchmarks
@@ -206,7 +208,12 @@ for what remains before production (Phase 1: 13-24 eng-days).
 - Concurrent HTTP throughput benchmarks (oha-based, configurable concurrency)
 - Go vs Lua plugin comparison infrastructure (Docker stacks, automated scripts)
 - Cache effectiveness and stampede simulation benchmarks
-- Admin endpoint authentication (`PDP_ADMIN_TOKEN` Bearer token)
+- Admin endpoint authentication (`PDP_ADMIN_TOKEN` Bearer token) with rate-limiting (1 req/sec)
+- Decision audit logging (structured tracing of every authorization decision with PARC, determining policies, eval latency)
+- Skip-on-error detection (warn-level log when Cedar skips errored policies -- potential forbid bypass indicator)
+- Policy epoch header (`X-Policy-Epoch`) for plugin-side cache invalidation on policy reload
+- Plugin-side cache TTL jitter (+/-20%) to prevent stampede on simultaneous expiry
+- Plugin-side cache key versioning (epoch-aware keys auto-invalidate on policy reload)
 - Graceful shutdown (SIGTERM/SIGINT drain with in-flight request completion)
 - Kubernetes-style health probes (`/healthz` liveness, `/readyz` readiness)
 - X-Request-Id middleware (propagate or generate UUID v4 for log correlation)
@@ -240,7 +247,7 @@ to swap between this PDP and AVP for authorization decisions.
 | Policy templates API | Create/link/manage parameterized policy templates | Requires template storage + runtime linking infrastructure |
 | Identity sources | Connect to Cognito user pools or OIDC providers | Requires IAM integration, token refresh, user pool sync |
 | Schema management API | CRUD operations on Cedar schema | Requires schema versioning, migration strategy, validation pipeline |
-| Decision audit logging | Durable log of every authorization decision | Requires logging infrastructure (CloudTrail equivalent), retention policy, query interface |
+| Decision audit logging (durable) | Persistent log of every authorization decision | PDP logs decisions via structured tracing (stdout). Durable storage requires logging infrastructure (CloudTrail equivalent), retention policy, query interface |
 
 These features are the management plane -- they surround the authorization engine
 but don't affect how policies are evaluated. The Cedar evaluation engine, policy
@@ -391,7 +398,8 @@ for cache hit rate measurement.
   concurrency 100. Median reload completes in 15-21ms. No dropped requests.
 - **Memory at scale**: 10K policies = 19 MB, 10K entities = 5.3 MB.
 - **Sidecar cache**: No cross-instance invalidation. Stale window = TTL (30-60s).
-  No TTL jitter (stampede risk). See `benchmarks/stampede_sim.sh`.
+  TTL jitter (+/-20%) mitigates stampede. Cache keys include policy epoch from
+  `X-Policy-Epoch` header -- stale decisions auto-invalidate on policy reload.
 - **Batch concurrency ceiling**: batch_100 x concurrency_50 = p99 of 51ms.
   Batch_10 x concurrency_50 = p99 of 6ms. Stay below batch_50 for <10ms p99.
 

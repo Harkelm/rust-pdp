@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::path::PathBuf;
 
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
@@ -404,4 +405,143 @@ async fn test_batch_exceeds_max() {
         body["error"].as_str().unwrap().contains("maximum of 100"),
         "error should mention the batch size limit"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Admin reload rate-limiting tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_admin_reload_rate_limited() {
+    let addr = start_server().await;
+    let client = reqwest::Client::new();
+
+    // First reload should succeed.
+    let resp = client
+        .post(format!("http://{addr}/admin/reload"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "first reload must succeed");
+
+    // Immediate second reload should be rate-limited (429).
+    let resp = client
+        .post(format!("http://{addr}/admin/reload"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429, "rapid second reload must be rate-limited");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("rate limited"),
+        "error should mention rate limiting"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Policy epoch header tests
+// ---------------------------------------------------------------------------
+
+async fn start_server_with_epoch_header() -> SocketAddr {
+    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("policies");
+    let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
+    let state: cedar_pdp::handlers::AppState =
+        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
+
+    let app = Router::new()
+        .route("/v1/is_authorized", post(cedar_pdp::handlers::is_authorized))
+        .route("/admin/reload", post(cedar_pdp::handlers::admin_reload))
+        .route("/health", get(cedar_pdp::handlers::health))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            cedar_pdp::handlers::policy_epoch_layer,
+        ))
+        .with_state(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    addr
+}
+
+#[tokio::test]
+async fn test_policy_epoch_header_present() {
+    let addr = start_server_with_epoch_header().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/is_authorized"))
+        .json(&serde_json::json!({
+            "principal": "ApiGateway::User::\"alice\"",
+            "action": "ApiGateway::Action::\"read\"",
+            "resource": "ApiGateway::ApiResource::\"doc-1\""
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let epoch = resp
+        .headers()
+        .get("x-policy-epoch")
+        .expect("X-Policy-Epoch header must be present");
+    let epoch_val: u64 = epoch.to_str().unwrap().parse().unwrap();
+    assert!(epoch_val > 0, "epoch must be a positive timestamp");
+}
+
+#[tokio::test]
+async fn test_policy_epoch_updates_after_reload() {
+    let addr = start_server_with_epoch_header().await;
+    let client = reqwest::Client::new();
+
+    // Get initial epoch from an authz request.
+    let resp = client
+        .post(format!("http://{addr}/v1/is_authorized"))
+        .json(&serde_json::json!({
+            "principal": "ApiGateway::User::\"alice\"",
+            "action": "ApiGateway::Action::\"read\"",
+            "resource": "ApiGateway::ApiResource::\"doc-1\""
+        }))
+        .send()
+        .await
+        .unwrap();
+    let epoch1: u64 = resp
+        .headers()
+        .get("x-policy-epoch")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    // Wait >1ms, then reload to advance epoch.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let reload_resp = client
+        .post(format!("http://{addr}/admin/reload"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reload_resp.status(), 200);
+
+    // Get new epoch -- must be greater than before.
+    let resp = client
+        .post(format!("http://{addr}/v1/is_authorized"))
+        .json(&serde_json::json!({
+            "principal": "ApiGateway::User::\"alice\"",
+            "action": "ApiGateway::Action::\"read\"",
+            "resource": "ApiGateway::ApiResource::\"doc-1\""
+        }))
+        .send()
+        .await
+        .unwrap();
+    let epoch2: u64 = resp
+        .headers()
+        .get("x-policy-epoch")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    assert!(epoch2 > epoch1, "epoch must advance after reload: {epoch1} -> {epoch2}");
 }
