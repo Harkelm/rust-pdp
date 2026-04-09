@@ -9,10 +9,9 @@
 //! delivers unexpected content mid-operation.
 
 mod common;
-use common::{admin_allow_request, start_server, viewer_deny_request};
+use common::{admin_allow_request, production_policy_dir, start_server, viewer_deny_request};
 
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -245,11 +244,7 @@ fn epoch_does_not_advance_on_failed_reload() {
 /// interleave with parallel rayon evaluation.
 #[tokio::test]
 async fn test_batch_eval_correctness_under_concurrent_reloads() {
-    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("policies");
-    let addr = start_server(policy_path).await;
+    let addr = start_server(production_policy_dir()).await;
     let client = reqwest::Client::new();
 
     let start = Instant::now();
