@@ -125,7 +125,7 @@ See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analy
 
 ```bash
 cd pdp && cargo test
-# Runs 142 tests: 34 unit, 16 avp_compat, 85 integration/security/policy, 7 stress
+# Runs 149 tests: 34 unit, 16 avp_compat, 7 avp_stress, 85 integration/security/policy, 7 stress
 ```
 
 ### Criterion Benchmarks
@@ -261,6 +261,37 @@ Deny requests are faster because they short-circuit after finding no matching
 permit (6.9us eval) vs Allow which must evaluate matching policies (9.6us+).
 At concurrency 500, Allow sustains 111K RPS (p99=18ms), Deny sustains 222K RPS
 (p99=8ms). The 5ms p99 budget is met up to concurrency ~100 for Allow requests.
+
+### AVP Format Overhead (In-Process, Criterion)
+
+| Scenario | Native | AVP | Overhead |
+|----------|--------|-----|----------|
+| Parse only (no eval) | 9.4 us | 18.1 us | +93% |
+| Full path (parse + eval) | 20.7 us | 29.3 us | +42% |
+| Response serialization | 52 ns | 53 ns | ~0% |
+| Batch 10 (sequential eval) | 205 us | 298 us | +45% |
+| Batch 30 (sequential eval) | 618 us | 900 us | +46% |
+
+The AVP parsing overhead (~9 us constant) comes from typed value wrapper
+deserialization and explicit entity construction. This is a fixed cost per
+request independent of policy count or Cedar evaluation time. At production
+policy counts (10+ policies, 10+ us eval), the overhead is <50% of total
+request time and shrinks proportionally as policy complexity grows.
+
+### AVP Stress Test Results (HTTP, localhost)
+
+| Test | Concurrency | Requests | Result |
+|------|-------------|----------|--------|
+| Single authz correctness | 500 | 500 | 100% correct (250 ALLOW, 250 DENY) |
+| Single authz ceiling | 1000 | 1000 | 0 errors, ~2.2K req/s |
+| Batch throughput | 50 x batch_30 | 1,500 decisions | ~7.4K decisions/s |
+| Error storm (malformed) | 200 | 200 | 100% fail-closed DENY |
+| Mixed valid + malformed | 300 | 300 | 100% correct categorization |
+| Sustained ceiling | 2000 | 2000 | 0 errors, ~2.5K req/s |
+
+All stress tests verify correctness, not just throughput. Every response is
+validated against expected ALLOW/DENY decision. Error requests must return
+200 with DENY decision (fail-closed), not 500.
 
 ### Capacity Planning
 
