@@ -1,3 +1,5 @@
+mod common;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::path::PathBuf;
@@ -6,9 +8,6 @@ use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
-
-// We reference the crate's public modules via the binary crate name.
-// Since this is an integration test, we build a test server inline.
 
 async fn start_server() -> SocketAddr {
     let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("policies");
@@ -144,21 +143,7 @@ async fn test_claims_path_admin_allow() {
     // Admin role should permit read on any ApiResource via rbac-admin-all policy.
     let resp = client
         .post(format!("http://{addr}/v1/is_authorized"))
-        .json(&serde_json::json!({
-            "principal": "ignored-in-claims-path",
-            "action": "GET",
-            "resource": "/api/v1/users",
-            "claims": {
-                "sub": "alice",
-                "email": "alice@example.com",
-                "department": "engineering",
-                "org": "acme",
-                "roles": ["admin"],
-                "subscription_tier": "enterprise",
-                "suspended": false,
-                "allowed_scopes": ["internal"]
-            }
-        }))
+        .json(&common::admin_allow_request())
         .send()
         .await
         .unwrap();
@@ -177,21 +162,7 @@ async fn test_claims_path_viewer_deny_delete() {
     // rbac-viewer-read covers read+list only, org-scoped covers read+write only.
     let resp = client
         .post(format!("http://{addr}/v1/is_authorized"))
-        .json(&serde_json::json!({
-            "principal": "ignored",
-            "action": "DELETE",
-            "resource": "/api/v1/data",
-            "claims": {
-                "sub": "bob",
-                "email": "bob@example.com",
-                "department": "sales",
-                "org": "acme",
-                "roles": ["viewer"],
-                "subscription_tier": "basic",
-                "suspended": false,
-                "allowed_scopes": []
-            }
-        }))
+        .json(&common::viewer_deny_request())
         .send()
         .await
         .unwrap();
@@ -209,21 +180,7 @@ async fn test_claims_path_suspended_user_denied() {
     // Suspended admin should be denied -- forbid policy overrides permits.
     let resp = client
         .post(format!("http://{addr}/v1/is_authorized"))
-        .json(&serde_json::json!({
-            "principal": "ignored",
-            "action": "GET",
-            "resource": "/api/v1/users",
-            "claims": {
-                "sub": "suspended-admin",
-                "email": "admin@example.com",
-                "department": "engineering",
-                "org": "acme",
-                "roles": ["admin"],
-                "subscription_tier": "enterprise",
-                "suspended": true,
-                "allowed_scopes": ["internal"]
-            }
-        }))
+        .json(&common::suspended_deny_request())
         .send()
         .await
         .unwrap();
@@ -300,44 +257,14 @@ async fn test_batch_permit_and_deny() {
     let client = reqwest::Client::new();
 
     // Two requests: admin (Allow) and viewer-delete (Deny)
+    let mut admin_req = common::admin_allow_request();
+    admin_req["context"] = serde_json::json!({});
+    let mut viewer_req = common::viewer_deny_request();
+    viewer_req["context"] = serde_json::json!({});
+
     let resp = client
         .post(format!("http://{addr}/v1/batch_is_authorized"))
-        .json(&serde_json::json!({
-            "requests": [
-                {
-                    "principal": "ignored",
-                    "action": "GET",
-                    "resource": "/api/v1/users",
-                    "context": {},
-                    "claims": {
-                        "sub": "alice",
-                        "email": "alice@example.com",
-                        "department": "engineering",
-                        "org": "acme",
-                        "roles": ["admin"],
-                        "subscription_tier": "enterprise",
-                        "suspended": false,
-                        "allowed_scopes": ["internal"]
-                    }
-                },
-                {
-                    "principal": "ignored",
-                    "action": "DELETE",
-                    "resource": "/api/v1/data",
-                    "context": {},
-                    "claims": {
-                        "sub": "bob",
-                        "email": "bob@example.com",
-                        "department": "sales",
-                        "org": "acme",
-                        "roles": ["viewer"],
-                        "subscription_tier": "basic",
-                        "suspended": false,
-                        "allowed_scopes": []
-                    }
-                }
-            ]
-        }))
+        .json(&serde_json::json!({ "requests": [admin_req, viewer_req] }))
         .send()
         .await
         .unwrap();
