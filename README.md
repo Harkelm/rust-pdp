@@ -57,7 +57,7 @@ projects/rust-pdp/
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, avp.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration, security, avp_security, admin_auth, concurrency, policy_coverage, avp_compat, reload_resilience, edge_cases, policy_evolution, etc. (237 tests)
+    tests/                  #   integration, security, avp_security, admin_auth, concurrency, policy_coverage, avp_compat, reload_resilience, edge_cases, policy_evolution, etc. (248 tests)
     benches/                #   cedar_eval.rs, hierarchy_depth.rs, avp_format_overhead.rs, rayon_crossover.rs, etc. (8 Criterion benchmarks)
     examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
@@ -135,7 +135,9 @@ See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analy
 
 ```bash
 cd pdp && cargo test
-# Runs 237 tests: 36 unit, 16 avp_compat, 7 avp_stress, 42 avp_security, 7 admin_auth, 19 edge_cases, 88 integration/security/policy, 7 stress, 11 reload_resilience, 6 policy_evolution
+# Runs 248 tests across 20 test files: core logic, AVP wire format, adversarial/fail-closed,
+# concurrent correctness, admin auth, edge cases, pathological entity construction, schema hash
+# stability, policy coverage, reload resilience, stress, policy evolution, and more.
 ```
 
 ### Criterion Benchmarks
@@ -212,7 +214,7 @@ for what remains before production (Phase 1: 13-24 eng-days).
 - Go and Lua Kong plugins with fail-closed semantics
 - Entity resolution from JWT claims (Tier 1)
 - Integration test harness (Docker Compose, 6 tests passing)
-- Criterion benchmarks (Cedar eval: 5-445us depending on policy count)
+- Criterion benchmarks (Cedar eval: 5-631us depending on policy count)
 - Concurrent HTTP throughput benchmarks (oha-based, configurable concurrency)
 - Go vs Lua plugin comparison infrastructure (Docker stacks, automated scripts)
 - Cache effectiveness and stampede simulation benchmarks
@@ -234,14 +236,14 @@ The authorization hot path is fully implemented and stress-tested. The PDP speak
 the AVP wire format natively. No code changes needed to swap between this PDP and
 AWS AVP for authorization decisions.
 
-**Implemented (149 tests passing, stress-tested to c=2000):**
+**Implemented (165 tests passing, stress-tested to c=2000):**
 - `IsAuthorized` -- single authorization
 - `BatchIsAuthorized` -- batch authorization (30-item limit, homogeneity constraint)
 - Typed value wrappers (String, Boolean, Long, Set, Record, EntityIdentifier)
 - Explicit entity hierarchy via `entities.entityList`
 - `policyStoreId` accepted (ignored in single-store deployment)
 - Fail-closed: malformed requests always produce DENY with error, never 500
-- Typed value parsing cost: +9 us constant per request (~42% of full eval path with 10 production policies; proportionally less with more policies)
+- Typed value parsing cost: +14 us per request (~108% of full eval path with 10 production policies; proportionally less with more policies)
 
 **Not implemented -- requires enterprise infrastructure decisions:**
 
@@ -271,7 +273,9 @@ The delta is in how policies get into the system and how decisions get logged ou
 ## Performance Baselines
 
 All numbers measured on i7-14700KF (20c/28t), 32GB RAM, Rust 1.92, Cedar 4.9.1.
-See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) for detailed results and methodology.
+Numbers below are from the latest Criterion run (2026-04-09).
+**See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) for detailed results,
+methodology, and the full benchmark inventory with reproduction instructions.**
 
 **Hardware caveat**: All benchmarks were run on consumer-grade bare-metal hardware
 (i7-14700KF desktop) with no background load. **These numbers are NOT representative
@@ -288,21 +292,21 @@ commitments.**
 | Scenario | Policies | Mean | What it exercises |
 |----------|----------|------|-------------------|
 | Trivial permit (10 policies, flat) | 10 | 5.2 us | Equality check baseline |
-| Trivial permit (100 policies, flat) | 100 | 45 us | Linear scaling validation |
-| Trivial permit (1000 policies, flat) | 1000 | 445 us | Upper bound, simple policies |
-| **Realistic: admin-read** | 10 prod | 9.6 us | `in` membership traversal (RBAC) |
-| **Realistic: viewer-delete-deny** | 10 prod | 6.9 us | Full policy scan, no match |
-| **Realistic: suspended-admin-deny** | 10 prod | 9.4 us | Forbid override |
-| **Realistic: data-scope-allow** | 10 prod | 9.1 us | `.contains()` set membership |
-| **Realistic: cross-org-deny** | 10 prod | 13.5 us | Attribute mismatch |
-| **Realistic: multi-role-write** | 10 prod | 15.6 us | Multiple `in` checks |
-| **Realistic + 100 noise** | 110 | 93 us | Complex predicates at scale |
-| **Realistic + 500 noise** | 510 | 423 us | Complex predicates at scale |
-| **Realistic + 1000 noise** | 1010 | 835 us | Complex predicates at scale |
-| **Hierarchy depth 5** | 10 | 5.5 us | `in` traversal, 5-level DAG |
-| **Hierarchy depth 10** | 10 | 5.5 us | `in` traversal, 10-level DAG |
-| **Hierarchy depth 15** | 10 | 8.4 us | `in` traversal, 15-level DAG |
-| **Hierarchy depth 20** | 10 | 8.6 us | `in` traversal, 20-level DAG |
+| Trivial permit (100 policies, flat) | 100 | 50 us | Linear scaling validation |
+| Trivial permit (1000 policies, flat) | 1000 | 631 us | Upper bound, simple policies |
+| **Realistic: admin-read** | 10 prod | 17.5 us | `in` membership traversal (RBAC) |
+| **Realistic: viewer-delete-deny** | 10 prod | 11.6 us | Full policy scan, no match |
+| **Realistic: suspended-admin-deny** | 10 prod | 17.3 us | Forbid override |
+| **Realistic: data-scope-allow** | 10 prod | 16.6 us | `.contains()` set membership |
+| **Realistic: cross-org-deny** | 10 prod | 14.4 us | Attribute mismatch |
+| **Realistic: multi-role-write** | 10 prod | 16.8 us | Multiple `in` checks |
+| **Realistic + 100 noise** | 110 | 76 us | Complex predicates at scale |
+| **Realistic + 500 noise** | 510 | 235 us | Complex predicates at scale |
+| **Realistic + 1000 noise** | 1010 | 583 us | Complex predicates at scale |
+| **Hierarchy depth 5** | 10 | 5.6 us | `in` traversal, 5-level DAG |
+| **Hierarchy depth 10** | 10 | 7.7 us | `in` traversal, 10-level DAG |
+| **Hierarchy depth 15** | 10 | 5.5 us | `in` traversal, 15-level DAG |
+| **Hierarchy depth 20** | 10 | 8.2 us | `in` traversal, 20-level DAG |
 
 ### HTTP Round-Trip (PDP Server)
 
@@ -314,7 +318,7 @@ commitments.**
 | Max RPS | N/A (sequential) | 87,189 (Allow), 220,567 (Deny) |
 
 Deny requests are faster because they short-circuit after finding no matching
-permit (6.9us eval) vs Allow which must evaluate matching policies (9.6us+).
+permit (11.6us eval) vs Allow which must evaluate matching policies (17.5us+).
 At concurrency 500, Allow sustains 111K RPS (p99=18ms), Deny sustains 222K RPS
 (p99=8ms). The 5ms p99 budget is met up to concurrency ~100 for Allow requests.
 
@@ -324,19 +328,19 @@ The AVP format uses typed value wrappers (`{"String": "foo"}` instead of raw
 `"foo"`). This adds a fixed parsing cost per request. Benchmarked against a
 minimal format (raw Cedar UID strings, no typed wrappers) for reference:
 
-| Scenario | Minimal Format | AVP Format | Overhead |
-|----------|----------------|------------|----------|
-| Parse only (no eval) | 9.4 us | 18.1 us | +93% |
-| Full path (parse + eval) | 20.7 us | 29.3 us | +42% |
-| Response serialization | 52 ns | 53 ns | ~0% |
-| Batch 10 (sequential eval) | 205 us | 298 us | +45% |
-| Batch 30 (sequential eval) | 618 us | 900 us | +46% |
+| Scenario | Native Format | AVP Format | Overhead |
+|----------|---------------|------------|----------|
+| Parse only (no eval) | 12.2 us | 26.3 us | +116% |
+| Full path (parse + eval) | 22.4 us | 46.7 us | +108% |
+| Response serialization | 55 ns | 114 ns | negligible |
+| Batch 10 (sequential eval) | 383 us | 417 us | +9% |
+| Batch 30 (sequential eval) | 1.11 ms | 1.61 ms | +45% |
 
-The ~9 us constant overhead comes from typed value wrapper deserialization and
+The ~14 us per-request overhead comes from typed value wrapper deserialization and
 explicit entity construction. This is the cost of speaking the AVP format --
 fixed per request, independent of policy count or Cedar evaluation time. At
-production policy counts (10+ policies, 10+ us eval), it's <50% of total
-request time and shrinks proportionally as policy complexity grows. For context,
+production policy counts (10+ policies, 12+ us eval), it's proportional to the
+Cedar evaluation cost and shrinks as policy complexity grows. For context,
 the full AVP-format request round-trip at c=100 is still well under 5ms p99.
 
 ### AVP Stress Test Results (HTTP, localhost)
@@ -363,14 +367,14 @@ Latency is sub-millisecond (local eval) vs AVP's network round-trip to AWS.
 
 | Metric | Value | Conditions |
 |--------|-------|------------|
-| Cedar eval per-policy cost | ~4.5 us/policy (trivial), ~0.8 us/policy (realistic) | Linear scaling |
-| Policy count for 1ms Cedar budget | ~220 (trivial), ~1200 (realistic) | Interpolated |
+| Cedar eval per-policy cost | ~6.3 us/policy (trivial), ~1.5 us/policy (realistic) | Linear scaling |
+| Policy count for 1ms Cedar budget | ~160 (trivial), ~700 (realistic) | Interpolated |
 | HTTP overhead (localhost) | ~220 us | JSON ser/de + tokio dispatch |
 | Memory per policy | ~2 KB/policy | Measured at 10K policies |
 | Memory per entity | ~555 bytes/entity | Measured at 10K entities |
 | Schema memory | ~18 KB | Production schema (ApiGateway) |
-| Entity hierarchy depth budget | 20 levels = 8.6 us | `in` traversal, linear chain |
-| Batch speedup vs sequential | 4.5x (100 decisions) | rayon parallel eval |
+| Entity hierarchy depth budget | 20 levels = 8.2 us | `in` traversal, linear chain |
+| Batch speedup vs sequential | 2.4x (100 decisions) | rayon parallel eval |
 | Batch peak throughput | 192K decisions/sec | batch_100 x concurrency 50 |
 
 ### Go vs Lua Plugin Comparison
@@ -412,9 +416,10 @@ for cache hit rate measurement.
 
 - **tokio blocking pool**: Default 512 threads. Batch endpoint uses rayon instead
   of `spawn_blocking` per sub-request to avoid saturation.
-- **Cedar evaluation**: O(n) in policy count. 1000 policies = ~445us (trivial),
-  ~835us (realistic with RBAC/ABAC). Realistic policies cost ~1.9x trivial.
-- **Entity hierarchy**: depth 1-10 = ~5.5us, depth 15-20 = ~8.5us. Sub-linear
+- **Cedar evaluation**: O(n) in policy count. 1000 policies = ~631us (trivial),
+  ~583us (realistic with RBAC/ABAC noise scaling). Realistic noise policies are
+  more selective, yielding faster scanning than trivial policies at high counts.
+- **Entity hierarchy**: depth 1-10 = ~5-8us, depth 15-20 = ~5.5-8.2us. Sub-linear
   scaling -- Cedar's entity lookup is hash-based, not scan-based.
 - **Hot-reload under load**: arc-swap reload adds ~4ms to p99 (+102%) at
   concurrency 100. Median reload completes in 15-21ms. No dropped requests.
@@ -493,11 +498,11 @@ bound the in-flight work and return 503+Retry-After when saturated.
 
 ### Entity construction caching (RT-26 AGI-Acc F1/F4)
 
-Entity construction from JWT claims costs ~10.7 us per request -- the same order
-of magnitude as Cedar evaluation itself (~9.6 us with production policies). For
-agent workloads where the same role/org/tier patterns repeat across thousands of
+Entity construction from JWT claims costs ~10.7 us per request -- comparable to
+Cedar evaluation itself (~11.6-17.5 us with production policies). For agent
+workloads where the same role/org/tier patterns repeat across thousands of
 requests, a small LRU cache of pre-validated entity sets (keyed on the claims
 hash) could serve the majority of requests from a lookup. At 50 roles per agent
-delegation chain, entity construction reaches ~93 us, making this optimization
+delegation chain, entity construction reaches ~105 us, making this optimization
 increasingly valuable as role counts grow. This is premature for current
 human-request workloads but becomes load-bearing at agent scale.
