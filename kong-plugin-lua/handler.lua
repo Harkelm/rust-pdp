@@ -20,6 +20,13 @@ local CedarAuthHandler = {
 -- Per-worker in-memory cache with TTL expiry.
 -- Key: principal|action|resource|epoch (epoch from X-Policy-Epoch header).
 -- Only Allow/Deny decisions are cached; errors/timeouts are never cached.
+--
+-- NOTE: This is an unbounded Lua table. Under high-cardinality workloads (many
+-- distinct principal/path combinations), memory grows without limit per worker.
+-- For bounded API surfaces (typical gateway deployments) this is acceptable.
+-- If cardinality is high (e.g., per-user unique resource paths), add LRU eviction
+-- or a max-entries cap. Kong's built-in shared dict cache (lua_shared_dict) with
+-- LRU is an alternative for cross-worker sharing with bounded memory.
 local decision_cache = {}
 
 -- Current policy epoch from PDP, used for cache key versioning (RT-26 P1 #8).

@@ -57,7 +57,7 @@ projects/rust-pdp/
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, avp.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration, security, concurrency, policy_coverage, avp_compat, reload_resilience, edge_cases, etc. (182 tests)
+    tests/                  #   integration, security, avp_security, admin_auth, concurrency, policy_coverage, avp_compat, reload_resilience, edge_cases, etc. (231 tests)
     benches/                #   cedar_eval.rs, hierarchy_depth.rs, avp_format_overhead.rs (Criterion benchmarks)
     examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
@@ -135,7 +135,7 @@ See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analy
 
 ```bash
 cd pdp && cargo test
-# Runs 182 tests: 34 unit, 16 avp_compat, 7 avp_stress, 19 edge_cases, 88 integration/security/policy, 7 stress, 11 reload_resilience
+# Runs 231 tests: 34 unit, 16 avp_compat, 7 avp_stress, 42 avp_security, 7 admin_auth, 19 edge_cases, 88 integration/security/policy, 7 stress, 11 reload_resilience
 ```
 
 ### Criterion Benchmarks
@@ -273,10 +273,15 @@ The delta is in how policies get into the system and how decisions get logged ou
 All numbers measured on i7-14700KF (20c/28t), 32GB RAM, Rust 1.92, Cedar 4.9.1.
 See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) for detailed results and methodology.
 
-**Hardware caveat**: These are bare-metal numbers with no background load. Cloud
-instances (shared vCPUs, noisy neighbors) will show different absolute values.
-Relative relationships (linear policy scaling, Go vs Lua ratios) should hold.
-Re-validate on target production hardware before capacity planning.
+**Hardware caveat**: All benchmarks were run on consumer-grade bare-metal hardware
+(i7-14700KF desktop) with no background load. **These numbers are NOT representative
+of cloud deployment performance.** Cloud instances with shared vCPUs, noisy neighbors,
+and different memory hierarchies will produce materially different absolute latency
+and throughput numbers. Expect 2-5x higher tail latencies on typical cloud VMs.
+The relative relationships (linear policy scaling, Go vs Lua ratios, entity count
+independence) should hold across hardware. **Re-run all benchmarks on target
+production hardware before using these numbers for capacity planning or SLA
+commitments.**
 
 ### Cedar Evaluation (In-Process, Criterion)
 

@@ -7,13 +7,15 @@ Rust: 1.92 (release profile, optimized)
 
 ### Hardware Caveat
 
-All results in this document were measured on a single bare-metal workstation
-(i7-14700KF, 32GB DDR5, NVMe SSD, no background load). Production deployments
-on cloud instances (shared vCPUs, noisy neighbors, different memory hierarchy)
-will show different absolute numbers. The relative relationships (linear policy
-scaling, entity count independence, Go vs Lua ratios) should hold, but absolute
-latency and throughput numbers should be re-validated on target production hardware
-before using them for capacity planning or SLA commitments.
+**All results in this document were measured on consumer-grade bare-metal hardware**
+(i7-14700KF desktop, 32GB DDR5, NVMe SSD, no background load). **These numbers are
+NOT representative of cloud deployment performance.** Cloud instances with shared
+vCPUs, noisy neighbors, and different memory hierarchies will produce materially
+different absolute latency and throughput numbers. Expect 2-5x higher tail latencies
+on typical cloud VMs. The relative relationships (linear policy scaling, entity count
+independence, Go vs Lua ratios) should hold across hardware. **Re-run all benchmarks
+on target production hardware before using these numbers for capacity planning or SLA
+commitments.**
 
 ## Cedar Evaluation (In-Process, Criterion)
 

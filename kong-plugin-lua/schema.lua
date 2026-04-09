@@ -39,6 +39,10 @@ return {
               default  = 30000,
               required = true,
               gt       = 0,
+              -- No hard upper bound enforced. Operator caution: values above 300000
+              -- (5 min) mean stale auth decisions persist long after policy reload,
+              -- even with epoch-based cache key versioning (epoch only updates on the
+              -- next PDP response, not proactively). Recommended range: 5000-60000ms.
             },
           },
         },

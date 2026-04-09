@@ -69,15 +69,16 @@ Multiple agents may work in this repo simultaneously. Safety rules:
 
 ```bash
 cd pdp
-cargo test                    # all unit + integration + stress tests (182 tests)
+cargo test                    # all unit + integration + stress tests (231 tests)
 cargo bench                   # all Criterion benchmarks
 cargo bench --bench cedar_eval  # specific benchmark group
 cargo run --example memory_scaling --release  # heap measurement
 ```
 
 Tests use production Cedar policies from `../policies/`. Integration tests spin up
-an axum server on a random port per test. Tests construct `AppContext::new(store, None)`
-(no admin token) so admin endpoints are unrestricted in test mode.
+an axum server on a random port per test. Most tests construct `AppContext::new(store, None)`
+(no admin token) so admin endpoints are unrestricted in test mode. The `admin_auth.rs`
+tests exercise both auth-enforced mode (`Some(token)`) and dev mode (`None`).
 
 ## Constraints
 
