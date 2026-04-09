@@ -5,6 +5,16 @@ Cedar-policy version: 4.9.1
 Hardware: i7-14700KF (20c/28t), 32GB RAM
 Rust: 1.92 (release profile, optimized)
 
+### Hardware Caveat
+
+All results in this document were measured on a single bare-metal workstation
+(i7-14700KF, 32GB DDR5, NVMe SSD, no background load). Production deployments
+on cloud instances (shared vCPUs, noisy neighbors, different memory hierarchy)
+will show different absolute numbers. The relative relationships (linear policy
+scaling, entity count independence, Go vs Lua ratios) should hold, but absolute
+latency and throughput numbers should be re-validated on target production hardware
+before using them for capacity planning or SLA commitments.
+
 ## Cedar Evaluation (In-Process, Criterion)
 
 Benchmarks measure `Authorizer::is_authorized()` in isolation -- no HTTP, no
@@ -361,4 +371,10 @@ entries to expire simultaneously, forcing 1000 PDP calls in a burst.
 
 **Recommendation**: Add 20% TTL jitter to smooth expiry distribution. With 20%
 jitter on 5s TTL, entries expire across a 1000ms window (4000-5000ms), reducing
-the peak burst by ~5x.
+the peak burst by an estimated ~5x.
+
+**Note**: The jitter mitigation is proposed but **not yet measured**. The ~5x
+reduction estimate is based on uniform distribution of expiry times across the
+jitter window, not empirical measurement. The Lua plugin implements jitter, but
+no stampede benchmark has been re-run with jitter enabled to validate the actual
+reduction factor. This should be verified before relying on it for SLA guarantees.

@@ -57,7 +57,7 @@ projects/rust-pdp/
     roundtable/             # Full 9-panelist architecture roundtable (RT-26)
   pdp/                      # Rust PDP service (axum + cedar-policy 4)
     src/                    #   main.rs, handlers.rs, avp.rs, policy.rs, entities.rs, models.rs
-    tests/                  #   integration, security, concurrency, policy_coverage, avp_compat, etc. (152 tests)
+    tests/                  #   integration, security, concurrency, policy_coverage, avp_compat, reload_resilience, etc. (163 tests)
     benches/                #   cedar_eval.rs, hierarchy_depth.rs, avp_format_overhead.rs (Criterion benchmarks)
     examples/               #   memory_scaling.rs (heap measurement)
   kong-plugin-go/           # Kong Go external plugin (ADR-001 Path B)
@@ -127,7 +127,7 @@ See `docs/avp-comparison-and-api-compatibility.md` for the full comparison analy
 
 ```bash
 cd pdp && cargo test
-# Runs 152 tests: 34 unit, 16 avp_compat, 7 avp_stress, 88 integration/security/policy, 7 stress
+# Runs 163 tests: 34 unit, 16 avp_compat, 7 avp_stress, 88 integration/security/policy, 7 stress, 11 reload_resilience
 ```
 
 ### Criterion Benchmarks
@@ -266,6 +266,11 @@ The delta is in how policies get into the system and how decisions get logged ou
 All numbers measured on i7-14700KF (20c/28t), 32GB RAM, Rust 1.92, Cedar 4.9.1.
 See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) for detailed results and methodology.
 
+**Hardware caveat**: These are bare-metal numbers with no background load. Cloud
+instances (shared vCPUs, noisy neighbors) will show different absolute values.
+Relative relationships (linear policy scaling, Go vs Lua ratios) should hold.
+Re-validate on target production hardware before capacity planning.
+
 ### Cedar Evaluation (In-Process, Criterion)
 
 | Scenario | Policies | Mean | What it exercises |
@@ -398,8 +403,10 @@ for cache hit rate measurement.
   concurrency 100. Median reload completes in 15-21ms. No dropped requests.
 - **Memory at scale**: 10K policies = 19 MB, 10K entities = 5.3 MB.
 - **Sidecar cache**: No cross-instance invalidation. Stale window = TTL (30-60s).
-  TTL jitter (+/-20%) mitigates stampede. Cache keys include policy epoch from
-  `X-Policy-Epoch` header -- stale decisions auto-invalidate on policy reload.
+  TTL jitter (+/-20%) mitigates stampede (implemented in Lua plugin; reduction
+  factor estimated ~5x but not yet empirically verified -- see RESULTS.md).
+  Cache keys include policy epoch from `X-Policy-Epoch` header -- stale decisions
+  auto-invalidate on policy reload.
 - **Batch concurrency ceiling**: batch_100 x concurrency_50 = p99 of 51ms.
   Batch_10 x concurrency_50 = p99 of 6ms. Stay below batch_50 for <10ms p99.
 
