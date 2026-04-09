@@ -15,19 +15,18 @@
 //! are stored as Cedar annotations but not reflected in PolicyId::to_string().
 //! Tests use structural assertions (counts, presence) rather than exact names.
 
+mod common;
+use common::{admin_claims, production_policy_dir, viewer_claims};
+
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::path::PathBuf;
 
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
 
 async fn start_server() -> SocketAddr {
-    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("policies");
+    let policy_path = production_policy_dir();
     let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
     let state: cedar_pdp::handlers::AppState =
         Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
@@ -78,32 +77,6 @@ async fn authz_full(
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     (decision, reasons, errors)
-}
-
-fn admin_claims() -> serde_json::Value {
-    serde_json::json!({
-        "sub": "diag-admin",
-        "email": "admin@acme.com",
-        "department": "engineering",
-        "org": "acme",
-        "roles": ["admin"],
-        "subscription_tier": "enterprise",
-        "suspended": false,
-        "allowed_scopes": ["internal"]
-    })
-}
-
-fn viewer_claims() -> serde_json::Value {
-    serde_json::json!({
-        "sub": "diag-viewer",
-        "email": "viewer@acme.com",
-        "department": "sales",
-        "org": "acme",
-        "roles": ["viewer"],
-        "subscription_tier": "basic",
-        "suspended": false,
-        "allowed_scopes": ["public"]
-    })
 }
 
 // ===========================================================================

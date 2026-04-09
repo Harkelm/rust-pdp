@@ -9,8 +9,12 @@
 //! load for a sidecar PDP. The goal is to find the ceiling so the team knows
 //! where admission control (tower::ConcurrencyLimit) becomes necessary.
 
+mod common;
+use common::{
+    admin_allow_request, production_policy_dir, suspended_deny_request, viewer_deny_request,
+};
+
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -22,10 +26,7 @@ use tokio::net::TcpListener;
 
 /// Start server with admin token set for auth testing.
 async fn start_server_with_auth(token: &str) -> SocketAddr {
-    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("policies");
+    let policy_path = production_policy_dir();
     let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
     let state: cedar_pdp::handlers::AppState = Arc::new(
         cedar_pdp::handlers::AppContext::new(store, Some(token.to_string())),
@@ -49,10 +50,7 @@ async fn start_server_with_auth(token: &str) -> SocketAddr {
 
 /// Start server without admin token (dev mode).
 async fn start_server_open() -> SocketAddr {
-    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("policies");
+    let policy_path = production_policy_dir();
     let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
     let state: cedar_pdp::handlers::AppState =
         Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
@@ -71,60 +69,6 @@ async fn start_server_open() -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     addr
-}
-
-fn admin_allow_request() -> serde_json::Value {
-    serde_json::json!({
-        "principal": "ignored",
-        "action": "GET",
-        "resource": "/api/v1/users",
-        "claims": {
-            "sub": "alice",
-            "email": "alice@example.com",
-            "department": "engineering",
-            "org": "acme",
-            "roles": ["admin"],
-            "subscription_tier": "enterprise",
-            "suspended": false,
-            "allowed_scopes": ["internal"]
-        }
-    })
-}
-
-fn viewer_deny_request() -> serde_json::Value {
-    serde_json::json!({
-        "principal": "ignored",
-        "action": "DELETE",
-        "resource": "/api/v1/data",
-        "claims": {
-            "sub": "bob",
-            "email": "bob@example.com",
-            "department": "sales",
-            "org": "acme",
-            "roles": ["viewer"],
-            "subscription_tier": "basic",
-            "suspended": false,
-            "allowed_scopes": []
-        }
-    })
-}
-
-fn suspended_deny_request() -> serde_json::Value {
-    serde_json::json!({
-        "principal": "ignored",
-        "action": "GET",
-        "resource": "/api/v1/users",
-        "claims": {
-            "sub": "suspended-admin",
-            "email": "admin@example.com",
-            "department": "engineering",
-            "org": "acme",
-            "roles": ["admin"],
-            "subscription_tier": "enterprise",
-            "suspended": true,
-            "allowed_scopes": ["internal"]
-        }
-    })
 }
 
 // ---------------------------------------------------------------------------

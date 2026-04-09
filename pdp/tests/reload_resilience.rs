@@ -8,16 +8,15 @@
 //! by policy.rs unit tests) and real-world failure modes where the filesystem
 //! delivers unexpected content mid-operation.
 
+mod common;
+use common::{admin_allow_request, start_server, viewer_deny_request};
+
 use std::fs;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::routing::{get, post};
-use axum::Router;
 use tempfile::TempDir;
-use tokio::net::TcpListener;
 
 // ---------------------------------------------------------------------------
 // PolicyStore unit tests: filesystem fault tolerance
@@ -237,67 +236,6 @@ fn epoch_does_not_advance_on_failed_reload() {
 // ---------------------------------------------------------------------------
 // HTTP-level tests: reload resilience under concurrent evaluation
 // ---------------------------------------------------------------------------
-
-async fn start_server(policy_dir: PathBuf) -> SocketAddr {
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(&policy_dir).expect("load policies");
-    let state: cedar_pdp::handlers::AppState =
-        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
-
-    let app = Router::new()
-        .route(
-            "/v1/is_authorized",
-            post(cedar_pdp::handlers::is_authorized),
-        )
-        .route(
-            "/v1/batch_is_authorized",
-            post(cedar_pdp::handlers::batch_is_authorized),
-        )
-        .route("/admin/reload", post(cedar_pdp::handlers::admin_reload))
-        .route("/health", get(cedar_pdp::handlers::health))
-        .with_state(state);
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    addr
-}
-
-fn admin_allow_request() -> serde_json::Value {
-    serde_json::json!({
-        "principal": "ignored",
-        "action": "GET",
-        "resource": "/api/v1/users",
-        "claims": {
-            "sub": "alice",
-            "email": "alice@example.com",
-            "department": "engineering",
-            "org": "acme",
-            "roles": ["admin"],
-            "subscription_tier": "enterprise",
-            "suspended": false,
-            "allowed_scopes": ["internal"]
-        }
-    })
-}
-
-fn viewer_deny_request() -> serde_json::Value {
-    serde_json::json!({
-        "principal": "ignored",
-        "action": "DELETE",
-        "resource": "/api/v1/data",
-        "claims": {
-            "sub": "bob",
-            "email": "bob@example.com",
-            "department": "sales",
-            "org": "acme",
-            "roles": ["viewer"],
-            "subscription_tier": "basic",
-            "suspended": false,
-            "allowed_scopes": []
-        }
-    })
-}
 
 /// Batch evaluation correctness under concurrent reloads (production policies).
 ///

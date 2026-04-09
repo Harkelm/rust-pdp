@@ -5,53 +5,10 @@
 //! Addresses AGI-Acc F3 (fail-closed under overload) and the arc-swap
 //! reload design documented in rust-pdp-service-architecture.md:108-116.
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
+mod common;
+use common::{admin_allow_request, production_policy_dir, start_server};
+
 use std::sync::Arc;
-
-use axum::routing::{get, post};
-use axum::Router;
-use tokio::net::TcpListener;
-
-async fn start_server() -> SocketAddr {
-    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("policies");
-    let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
-    let state: cedar_pdp::handlers::AppState =
-        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
-
-    let app = Router::new()
-        .route("/v1/is_authorized", post(cedar_pdp::handlers::is_authorized))
-        .route("/v1/batch_is_authorized", post(cedar_pdp::handlers::batch_is_authorized))
-        .route("/admin/reload", post(cedar_pdp::handlers::admin_reload))
-        .route("/health", get(cedar_pdp::handlers::health))
-        .with_state(state);
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    addr
-}
-
-fn admin_request() -> serde_json::Value {
-    serde_json::json!({
-        "principal": "ignored",
-        "action": "GET",
-        "resource": "/api/v1/users",
-        "claims": {
-            "sub": "alice",
-            "email": "alice@example.com",
-            "department": "engineering",
-            "org": "acme",
-            "roles": ["admin"],
-            "subscription_tier": "enterprise",
-            "suspended": false,
-            "allowed_scopes": ["internal"]
-        }
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Concurrent authorization requests
@@ -59,7 +16,7 @@ fn admin_request() -> serde_json::Value {
 
 #[tokio::test]
 async fn test_concurrent_authz_requests() {
-    let addr = start_server().await;
+    let addr = start_server(production_policy_dir()).await;
     let client = reqwest::Client::new();
 
     // Fire 50 concurrent authorization requests. All should return consistent
@@ -70,7 +27,7 @@ async fn test_concurrent_authz_requests() {
         let handle = tokio::spawn(async move {
             let resp = client
                 .post(format!("http://{addr}/v1/is_authorized"))
-                .json(&admin_request())
+                .json(&admin_allow_request())
                 .send()
                 .await
                 .unwrap();
@@ -97,7 +54,7 @@ async fn test_concurrent_authz_requests() {
 
 #[tokio::test]
 async fn test_reload_during_concurrent_eval() {
-    let addr = start_server().await;
+    let addr = start_server(production_policy_dir()).await;
     let client = reqwest::Client::new();
 
     // Spawn 30 concurrent authz requests + 5 concurrent reloads.
@@ -111,7 +68,7 @@ async fn test_reload_during_concurrent_eval() {
         let handle = tokio::spawn(async move {
             let resp = client
                 .post(format!("http://{addr}/v1/is_authorized"))
-                .json(&admin_request())
+                .json(&admin_allow_request())
                 .send()
                 .await
                 .unwrap();
@@ -165,7 +122,7 @@ async fn test_reload_during_concurrent_eval() {
 
 #[tokio::test]
 async fn test_concurrent_batch_evaluation() {
-    let addr = start_server().await;
+    let addr = start_server(production_policy_dir()).await;
     let client = reqwest::Client::new();
 
     // 10 concurrent batch requests, each with 20 sub-requests.
@@ -232,10 +189,7 @@ async fn test_concurrent_batch_evaluation() {
 fn test_policy_store_concurrent_reload_and_read() {
     use std::thread;
 
-    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("policies");
+    let policy_path = production_policy_dir();
     let store = Arc::new(
         cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies"),
     );
@@ -276,10 +230,7 @@ fn test_policy_store_concurrent_reload_and_read() {
 
 #[test]
 fn test_policy_cache_sees_reload() {
-    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("policies");
+    let policy_path = production_policy_dir();
     let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
 
     let mut cache = store.cache();
@@ -306,7 +257,7 @@ fn test_policy_cache_sees_reload() {
 
 #[tokio::test]
 async fn test_health_under_concurrent_load() {
-    let addr = start_server().await;
+    let addr = start_server(production_policy_dir()).await;
     let client = reqwest::Client::new();
 
     let mut handles = Vec::new();
