@@ -49,5 +49,9 @@ harness = false
 name = "mixed_workload"
 harness = false
 
+[[bench]]
+name = "avp_format_overhead"
+harness = false
+
 [[example]]
 name = "memory_scaling"
