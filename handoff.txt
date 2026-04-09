@@ -1,0 +1,76 @@
+Handoff: Test Infrastructure Refactor
+======================================
+
+Date: 2026-04-09
+Context: /simplify review of reload_resilience.rs surfaced broader test
+infrastructure duplication across all 12 integration test files.
+
+## What was done this session
+
+1. Added pdp/tests/reload_resilience.rs (11 tests) -- filesystem fault
+   tolerance during hot-reload.
+2. Updated RESULTS.md with hardware caveat and jitter verification status.
+3. Updated README.md with hardware caveat, jitter note, test counts.
+4. Simplified reload_resilience.rs per /simplify review:
+   - Extracted new_store() helper
+   - Fixed misleading test name and doc comment
+   - Removed redundant atomic counter and unused return value
+
+## Remaining: Shared test utility extraction
+
+All 12 test files in pdp/tests/ independently define their own server
+startup functions and request builders. Three review agents identified
+this as the top simplification opportunity.
+
+### Duplicated functions
+
+| Function pattern        | Files that duplicate it                              |
+|-------------------------|------------------------------------------------------|
+| start_server()          | integration, concurrency, security, diagnostics,     |
+|                         | stress (x2 variants), reload_resilience              |
+| admin_allow_request()   | stress, reload_resilience (identical)                 |
+| viewer_deny_request()   | stress, reload_resilience (identical)                 |
+| suspended_deny_request()| stress only (but could be shared)                    |
+| admin_claims()          | diagnostics only (but could be shared)               |
+| viewer_claims()         | diagnostics only (but could be shared)               |
+
+### Recommended approach
+
+Create tests/common/mod.rs with:
+
+```rust
+// tests/common/mod.rs
+pub fn admin_allow_request() -> serde_json::Value { ... }
+pub fn viewer_deny_request() -> serde_json::Value { ... }
+pub fn suspended_deny_request() -> serde_json::Value { ... }
+pub fn admin_claims() -> serde_json::Value { ... }
+pub fn viewer_claims() -> serde_json::Value { ... }
+
+// Parameterized -- covers all current variants
+pub async fn start_server(policy_dir: PathBuf) -> SocketAddr { ... }
+pub async fn start_server_with_auth(policy_dir: PathBuf, token: &str) -> SocketAddr { ... }
+```
+
+Then in each test file: `mod common; use common::*;`
+
+The parameterized start_server() (taking policy_dir) covers both the
+"production policies" case (pass ../policies) and the "temp dir" case
+(pass a TempDir path). The auth variant adds the token parameter.
+
+### Scope
+
+- Touch 7 of 12 test files (the ones that define request builders or
+  server starters)
+- Net reduction: ~150-200 lines of duplicated code
+- Risk: low (pure refactor, no behavior change)
+- Verify: cargo test must show 163 tests passing afterward
+
+### What NOT to do
+
+- Don't extract the tempdir-based helpers (new_store, write_baseline)
+  from reload_resilience.rs into common/ -- those are specific to that
+  test file's concern (filesystem fault injection).
+- Don't try to unify the router configurations across test files -- some
+  tests intentionally omit certain routes (security.rs omits /admin/reload,
+  diagnostics.rs omits batch endpoint). A parameterized builder would
+  over-engineer this.
