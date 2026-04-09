@@ -60,11 +60,7 @@ async fn avp_empty_body_returns_error() {
         .await
         .unwrap();
 
-    assert!(
-        resp.status().is_client_error(),
-        "empty body must return 4xx, got {}",
-        resp.status()
-    );
+    assert_eq!(resp.status(), 400, "empty body must return 400");
 }
 
 #[tokio::test]
@@ -101,11 +97,7 @@ async fn avp_non_json_body_returns_error() {
         .await
         .unwrap();
 
-    assert!(
-        resp.status().is_client_error(),
-        "non-JSON body must return 4xx, got {}",
-        resp.status()
-    );
+    assert_eq!(resp.status(), 400, "non-JSON body must return 400");
 }
 
 #[tokio::test]
@@ -122,11 +114,7 @@ async fn avp_truncated_json_body_returns_error() {
         .await
         .unwrap();
 
-    assert!(
-        resp.status().is_client_error(),
-        "truncated JSON must return 4xx, got {}",
-        resp.status()
-    );
+    assert_eq!(resp.status(), 400, "truncated JSON must return 400");
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +184,6 @@ async fn avp_string_value_with_integer_payload_fails_closed() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    // {"String": 123} is wrong -- String wrapper requires a string payload.
     let resp = client
         .post(format!("http://{addr}/avp/is-authorized"))
         .json(&json!({
@@ -234,7 +221,6 @@ async fn avp_boolean_value_with_string_payload_fails_closed() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    // {"Boolean": "yes"} is wrong -- Boolean wrapper requires a bool payload.
     let resp = client
         .post(format!("http://{addr}/avp/is-authorized"))
         .json(&json!({
@@ -269,7 +255,6 @@ async fn avp_long_value_with_string_payload_fails_closed() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    // {"Long": "42"} is wrong -- Long wrapper requires an integer payload.
     let resp = client
         .post(format!("http://{addr}/avp/is-authorized"))
         .json(&json!({
@@ -304,7 +289,6 @@ async fn avp_unknown_typed_value_wrapper_fails_closed() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    // "Float" is not a recognized wrapper type.
     let resp = client
         .post(format!("http://{addr}/avp/is-authorized"))
         .json(&json!({
@@ -343,7 +327,6 @@ async fn avp_set_with_non_array_payload_fails_closed() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    // {"Set": "not-an-array"} is wrong -- Set wrapper requires an array.
     let resp = client
         .post(format!("http://{addr}/avp/is-authorized"))
         .json(&json!({
@@ -375,7 +358,6 @@ async fn avp_record_with_non_object_payload_fails_closed() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    // {"Record": [1, 2, 3]} is wrong -- Record wrapper requires an object.
     let resp = client
         .post(format!("http://{addr}/avp/is-authorized"))
         .json(&json!({
@@ -685,10 +667,6 @@ async fn avp_null_byte_in_entity_id_handled() {
     // The request will evaluate -- it will DENY because no policy matches this ID.
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert!(
-        body["decision"].is_string(),
-        "must return a decision string, not crash"
-    );
     assert_ne!(
         body["decision"], "ALLOW",
         "null byte in entity ID must never produce spurious ALLOW"
@@ -721,9 +699,15 @@ async fn avp_null_byte_in_string_attribute_handled() {
         .unwrap();
 
     // Must not crash. DENY is expected (schema validation will reject).
+    // Must not crash. Decision depends on whether the attribute value passes schema
+    // validation -- the point is that null bytes don't cause a panic.
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert!(body["decision"].is_string(), "must return a decision, not crash");
+    assert!(
+        body["decision"] == "ALLOW" || body["decision"] == "DENY",
+        "must return a valid decision, got {:?}",
+        body["decision"]
+    );
 }
 
 #[tokio::test]
@@ -743,13 +727,9 @@ async fn avp_very_long_entity_id_handled() {
         .await
         .unwrap();
 
-    // Must not panic or hang. DENY expected -- no policy matches this ID.
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert!(
-        body["decision"].is_string(),
-        "must return a decision for very long entity ID"
-    );
+    assert_eq!(body["decision"], "DENY", "very long entity ID must not match any policy");
 }
 
 #[tokio::test]
@@ -778,11 +758,14 @@ async fn avp_very_long_string_attribute_handled() {
         .await
         .unwrap();
 
+    // Must not crash or hang. Long attribute values are valid -- decision depends
+    // on whether the entity matches a policy.
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     assert!(
-        body["decision"].is_string(),
-        "must return a decision for very long string attribute"
+        body["decision"] == "ALLOW" || body["decision"] == "DENY",
+        "must return a valid decision, got {:?}",
+        body["decision"]
     );
 }
 
@@ -819,7 +802,7 @@ async fn avp_extra_fields_in_request_are_ignored() {
     );
     if resp.status() == 200 {
         let body: Value = resp.json().await.unwrap();
-        assert!(body["decision"].is_string(), "must return a valid decision");
+        assert_eq!(body["decision"], "DENY", "unknown principal must fail closed to DENY");
     }
 }
 
@@ -874,11 +857,7 @@ async fn avp_batch_empty_body_returns_error() {
         .await
         .unwrap();
 
-    assert!(
-        resp.status().is_client_error(),
-        "empty batch body must return 4xx, got {}",
-        resp.status()
-    );
+    assert_eq!(resp.status(), 400, "empty batch body must return 400");
 }
 
 #[tokio::test]
@@ -894,11 +873,7 @@ async fn avp_batch_non_json_body_returns_error() {
         .await
         .unwrap();
 
-    assert!(
-        resp.status().is_client_error(),
-        "non-JSON batch body must return 4xx, got {}",
-        resp.status()
-    );
+    assert_eq!(resp.status(), 400, "non-JSON batch body must return 400");
 }
 
 #[tokio::test]

@@ -19,38 +19,14 @@ use tokio::net::TcpListener;
 
 const TEST_TOKEN: &str = "test-token-123";
 
-/// Server with admin token configured. All reload requests must present the token.
-async fn start_auth_server() -> SocketAddr {
-    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("policies");
-    let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
-    let state: cedar_pdp::handlers::AppState = Arc::new(cedar_pdp::handlers::AppContext::new(
-        store,
-        Some(TEST_TOKEN.to_string()),
-    ));
-
-    let app = Router::new()
-        .route("/admin/reload", post(cedar_pdp::handlers::admin_reload))
-        .route("/health", get(cedar_pdp::handlers::health))
-        .with_state(state);
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    addr
-}
-
-/// Server with no admin token (dev mode). Reload requires no auth.
-async fn start_dev_server() -> SocketAddr {
+async fn start_admin_server(token: Option<String>) -> SocketAddr {
     let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .join("policies");
     let store = cedar_pdp::policy::PolicyStore::from_dir(&policy_path).expect("load policies");
     let state: cedar_pdp::handlers::AppState =
-        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
+        Arc::new(cedar_pdp::handlers::AppContext::new(store, token));
 
     let app = Router::new()
         .route("/admin/reload", post(cedar_pdp::handlers::admin_reload))
@@ -69,7 +45,7 @@ async fn start_dev_server() -> SocketAddr {
 
 #[tokio::test]
 async fn test_reload_valid_token_succeeds() {
-    let addr = start_auth_server().await;
+    let addr = start_admin_server(Some(TEST_TOKEN.to_string())).await;
     let client = reqwest::Client::new();
 
     let resp = client
@@ -93,7 +69,7 @@ async fn test_reload_valid_token_succeeds() {
 
 #[tokio::test]
 async fn test_reload_invalid_token_rejected() {
-    let addr = start_auth_server().await;
+    let addr = start_admin_server(Some(TEST_TOKEN.to_string())).await;
     let client = reqwest::Client::new();
 
     let resp = client
@@ -113,7 +89,7 @@ async fn test_reload_invalid_token_rejected() {
 
 #[tokio::test]
 async fn test_reload_missing_authorization_header_rejected() {
-    let addr = start_auth_server().await;
+    let addr = start_admin_server(Some(TEST_TOKEN.to_string())).await;
     let client = reqwest::Client::new();
 
     let resp = client
@@ -136,7 +112,7 @@ async fn test_reload_missing_authorization_header_rejected() {
 
 #[tokio::test]
 async fn test_reload_empty_bearer_token_rejected() {
-    let addr = start_auth_server().await;
+    let addr = start_admin_server(Some(TEST_TOKEN.to_string())).await;
     let client = reqwest::Client::new();
 
     // "Bearer " with no token after the space. strip_prefix("Bearer ") yields ""
@@ -153,7 +129,7 @@ async fn test_reload_empty_bearer_token_rejected() {
 
 #[tokio::test]
 async fn test_reload_wrong_auth_scheme_rejected() {
-    let addr = start_auth_server().await;
+    let addr = start_admin_server(Some(TEST_TOKEN.to_string())).await;
     let client = reqwest::Client::new();
 
     // Basic scheme: strip_prefix("Bearer ") returns None, so the match arm
@@ -178,7 +154,7 @@ async fn test_reload_wrong_auth_scheme_rejected() {
 
 #[tokio::test]
 async fn test_reload_dev_mode_no_auth_required() {
-    let addr = start_dev_server().await;
+    let addr = start_admin_server(None).await;
     let client = reqwest::Client::new();
 
     // No Authorization header at all -- dev mode allows unrestricted access.
@@ -206,7 +182,7 @@ async fn test_reload_dev_mode_no_auth_required() {
 
 #[tokio::test]
 async fn test_reload_rate_limited_after_valid_auth() {
-    let addr = start_auth_server().await;
+    let addr = start_admin_server(Some(TEST_TOKEN.to_string())).await;
     let client = reqwest::Client::new();
 
     // First request: must succeed.
