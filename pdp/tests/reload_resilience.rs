@@ -12,7 +12,6 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use axum::routing::{get, post};
@@ -24,10 +23,11 @@ use tokio::net::TcpListener;
 // PolicyStore unit tests: filesystem fault tolerance
 // ---------------------------------------------------------------------------
 
-/// Write the production-equivalent schema and a single valid policy.
-fn write_baseline(dir: &std::path::Path) {
+/// Write a minimal schema and single valid policy, return (TempDir, PolicyStore).
+fn new_store() -> (TempDir, cedar_pdp::policy::PolicyStore) {
+    let dir = TempDir::new().unwrap();
     fs::write(
-        dir.join("api_gateway.cedarschema"),
+        dir.path().join("api_gateway.cedarschema"),
         r#"namespace App {
   entity User;
   entity Resource;
@@ -38,23 +38,21 @@ fn write_baseline(dir: &std::path::Path) {
     )
     .unwrap();
     fs::write(
-        dir.join("baseline.cedar"),
+        dir.path().join("baseline.cedar"),
         r#"permit(principal == App::User::"alice", action == App::Action::"View", resource);
 "#,
     )
     .unwrap();
+    let store =
+        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
+    assert_eq!(store.policy_count(), 1);
+    (dir, store)
 }
 
 #[test]
 fn reload_survives_truncated_policy_file() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
+    let (dir, store) = new_store();
 
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
-    assert_eq!(store.policy_count(), 1);
-
-    // Simulate a partial write (editor crashed mid-save): truncated Cedar.
     fs::write(dir.path().join("truncated.cedar"), "permit(principal ==").unwrap();
 
     let result = store.reload();
@@ -68,14 +66,7 @@ fn reload_survives_truncated_policy_file() {
 
 #[test]
 fn reload_survives_empty_policy_file() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
-    assert_eq!(store.policy_count(), 1);
-
-    // Empty .cedar file (zero bytes -- e.g., `> policy.cedar` shell accident).
+    let (dir, store) = new_store();
     fs::write(dir.path().join("empty.cedar"), "").unwrap();
 
     // Empty file is valid Cedar (no policies), so reload succeeds but count drops.
@@ -88,14 +79,7 @@ fn reload_survives_empty_policy_file() {
 
 #[test]
 fn reload_survives_binary_garbage_in_policy_file() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
-    assert_eq!(store.policy_count(), 1);
-
-    // Binary garbage (not valid UTF-8 or Cedar).
+    let (dir, store) = new_store();
     fs::write(
         dir.path().join("garbage.cedar"),
         &[0xFF, 0xFE, 0x00, 0x01, 0x80, 0x90],
@@ -116,12 +100,7 @@ fn reload_survives_binary_garbage_in_policy_file() {
 
 #[test]
 fn reload_rejects_schema_incompatible_policy() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
-    assert_eq!(store.policy_count(), 1);
+    let (dir, store) = new_store();
     let original_hash = store.schema_hash();
 
     // Write a policy referencing an entity type not in the schema.
@@ -156,12 +135,7 @@ fn reload_rejects_schema_incompatible_policy() {
 
 #[test]
 fn reload_rejects_policy_with_wrong_action_applies_to() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
-    assert_eq!(store.policy_count(), 1);
+    let (dir, store) = new_store();
 
     // Policy uses correct entity types but wrong action target (Edit applies to
     // User principal, but we reference a Resource as principal). Valid syntax,
@@ -191,12 +165,7 @@ fn reload_rejects_policy_with_wrong_action_applies_to() {
 
 #[test]
 fn reload_rejects_corrupt_schema_keeps_previous() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
-    assert_eq!(store.policy_count(), 1);
+    let (dir, store) = new_store();
     let original_hash = store.schema_hash();
 
     // Corrupt the schema file itself.
@@ -222,12 +191,7 @@ fn reload_rejects_corrupt_schema_keeps_previous() {
 
 #[test]
 fn reload_picks_up_valid_additions_after_failed_attempt() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
-    assert_eq!(store.policy_count(), 1);
+    let (dir, store) = new_store();
 
     // First: write a bad policy, reload fails.
     fs::write(dir.path().join("bad.cedar"), "not valid cedar !!!").unwrap();
@@ -253,11 +217,7 @@ fn reload_picks_up_valid_additions_after_failed_attempt() {
 
 #[test]
 fn epoch_does_not_advance_on_failed_reload() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
+    let (dir, store) = new_store();
     let epoch_before = store.last_reload_epoch_ms();
 
     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -278,11 +238,11 @@ fn epoch_does_not_advance_on_failed_reload() {
 // HTTP-level tests: reload resilience under concurrent evaluation
 // ---------------------------------------------------------------------------
 
-async fn start_server_with_dir(policy_dir: PathBuf) -> (SocketAddr, Arc<cedar_pdp::handlers::AppContext>) {
+async fn start_server(policy_dir: PathBuf) -> SocketAddr {
     let store =
         cedar_pdp::policy::PolicyStore::from_dir(&policy_dir).expect("load policies");
-    let ctx = Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
-    let state: cedar_pdp::handlers::AppState = Arc::clone(&ctx);
+    let state: cedar_pdp::handlers::AppState =
+        Arc::new(cedar_pdp::handlers::AppContext::new(store, None));
 
     let app = Router::new()
         .route(
@@ -300,7 +260,7 @@ async fn start_server_with_dir(policy_dir: PathBuf) -> (SocketAddr, Arc<cedar_pd
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (addr, ctx)
+    addr
 }
 
 fn admin_allow_request() -> serde_json::Value {
@@ -339,28 +299,26 @@ fn viewer_deny_request() -> serde_json::Value {
     })
 }
 
-/// Concurrent batch evaluation + reload attempts with filesystem faults.
+/// Batch evaluation correctness under concurrent reloads (production policies).
 ///
-/// Verifies that in-flight batch evaluations complete correctly even when
-/// reload attempts fail due to corrupt policy files on disk. The arc-swap
-/// design ensures readers always see a consistent (PolicySet, Schema) tuple.
+/// Scales beyond concurrency.rs test_reload_during_concurrent_eval (1000
+/// decisions via 20 x batch_50 vs 30 single requests). Verifies that arc-swap
+/// readers always see a consistent (PolicySet, Schema) tuple even when reloads
+/// interleave with parallel rayon evaluation.
 #[tokio::test]
-async fn test_batch_eval_survives_concurrent_corrupt_reload() {
+async fn test_batch_eval_correctness_under_concurrent_reloads() {
     let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .join("policies");
-    let (addr, _ctx) = start_server_with_dir(policy_path).await;
+    let addr = start_server(policy_path).await;
     let client = reqwest::Client::new();
 
-    let total_decisions = Arc::new(AtomicUsize::new(0));
     let start = Instant::now();
     let mut handles = Vec::new();
 
-    // 20 concurrent batch_50 requests (1000 decisions total).
     for batch_idx in 0..20 {
         let client = client.clone();
-        let td = Arc::clone(&total_decisions);
         let handle = tokio::spawn(async move {
             let requests: Vec<serde_json::Value> = (0..50)
                 .map(|j| {
@@ -384,7 +342,6 @@ async fn test_batch_eval_survives_concurrent_corrupt_reload() {
             let responses = body["responses"].as_array().unwrap();
             assert_eq!(responses.len(), 50);
 
-            // Verify every decision is correct.
             for (j, r) in responses.iter().enumerate() {
                 let decision = r["decision"].as_str().unwrap();
                 let expected = if (batch_idx + j) % 2 == 0 {
@@ -397,14 +354,11 @@ async fn test_batch_eval_survives_concurrent_corrupt_reload() {
                     "batch {batch_idx} item {j}: expected {expected}, got {decision}"
                 );
             }
-            td.fetch_add(50, Ordering::Relaxed);
         });
         handles.push(handle);
     }
 
-    // Interleaved: 10 reload attempts (some may be rate-limited).
-    // These hit the same policy dir (production policies, valid), so they should
-    // succeed or be rate-limited. Either way, no impact on in-flight evals.
+    // Interleaved reloads -- some may be rate-limited (429), which is correct.
     for i in 0..10 {
         let client = client.clone();
         let handle = tokio::spawn(async move {
@@ -428,12 +382,9 @@ async fn test_batch_eval_survives_concurrent_corrupt_reload() {
             .unwrap_or_else(|e| panic!("task {i} panicked: {e}"));
     }
 
-    let elapsed = start.elapsed();
-    let total = total_decisions.load(Ordering::Relaxed);
-    assert_eq!(total, 1000, "all 1000 batch decisions must complete correctly");
     eprintln!(
         "reload_resilience: 20 x batch_50 + 10 reloads in {:.1}ms",
-        elapsed.as_secs_f64() * 1000.0
+        start.elapsed().as_secs_f64() * 1000.0
     );
 }
 
@@ -443,12 +394,7 @@ async fn test_batch_eval_survives_concurrent_corrupt_reload() {
 
 #[test]
 fn store_recovers_after_multiple_sequential_failures() {
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store =
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load");
-    assert_eq!(store.policy_count(), 1);
+    let (dir, store) = new_store();
 
     // Fail 5 times in a row with different failure modes.
     let failures: Vec<(&str, &[u8])> = vec![
@@ -492,12 +438,8 @@ fn store_recovers_after_multiple_sequential_failures() {
 fn concurrent_readers_see_consistent_state_during_failed_reload() {
     use std::thread;
 
-    let dir = TempDir::new().unwrap();
-    write_baseline(dir.path());
-
-    let store = Arc::new(
-        cedar_pdp::policy::PolicyStore::from_dir(dir.path()).expect("initial load"),
-    );
+    let (dir, raw_store) = new_store();
+    let store = Arc::new(raw_store);
 
     // Write corrupt file so reload will fail.
     fs::write(dir.path().join("corrupt.cedar"), "not valid!!!").unwrap();
