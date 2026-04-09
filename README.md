@@ -213,13 +213,45 @@ for what remains before production (Phase 1: 13-24 eng-days).
 - Configurable port via `PDP_PORT` env var (default 8180)
 - Non-root container user in production Dockerfile
 
-**What's not built yet (Phase 1 scope):**
-- AuthZen endpoint (`/access/v1/evaluation`) -- deferred; enables engine-agnostic
-  external access and PDP engine portability (see ADR-002)
-- Tier 2 entity resolution (DB-backed roles/entitlements)
-- Decision audit logging
-- Shadow mode enforcement toggle
-- Policy CI/CD pipeline
+### AVP Compatibility Status
+
+The authorization hot path is fully implemented and stress-tested. Clients can
+use `/avp/is-authorized` and `/avp/batch-is-authorized` with the same JSON
+request/response format as Amazon Verified Permissions. No code changes needed
+to swap between this PDP and AVP for authorization decisions.
+
+**Implemented (149 tests passing, stress-tested to c=2000):**
+- `IsAuthorized` -- single authorization with AVP wire format
+- `BatchIsAuthorized` -- batch authorization (30-item limit, homogeneity constraint)
+- AVP typed value wrappers (String, Boolean, Long, Set, Record, EntityIdentifier)
+- Explicit entity hierarchy via `entities.entityList`
+- `policyStoreId` accepted (ignored in single-store deployment)
+- Fail-closed: malformed requests always produce DENY with error, never 500
+- Format overhead: +9 us constant per request (~42% on full path with 10 production policies; proportionally less with more policies)
+
+**Not implemented -- requires enterprise infrastructure decisions:**
+
+| AVP Feature | What It Does | Why It Requires Infrastructure |
+|-------------|-------------|-------------------------------|
+| `IsAuthorizedWithToken` | Validates JWT/OIDC tokens before authorization | Requires identity provider config (Cognito, Okta, etc.) and token validation infrastructure |
+| `BatchIsAuthorizedWithToken` | Batch version of token-based auth | Same as above |
+| Multi-store routing | `policyStoreId` maps to tenant-specific policy sets | Requires multi-tenant architecture decision: namespace isolation, policy storage backend, routing layer |
+| Policy CRUD API | Create/Update/Delete/List policies via API (16 AVP operations) | Requires policy storage backend (DB or git), versioning strategy, access control on who can modify policies |
+| Policy templates API | Create/link/manage parameterized policy templates | Requires template storage + runtime linking infrastructure |
+| Identity sources | Connect to Cognito user pools or OIDC providers | Requires IAM integration, token refresh, user pool sync |
+| Schema management API | CRUD operations on Cedar schema | Requires schema versioning, migration strategy, validation pipeline |
+| Decision audit logging | Durable log of every authorization decision | Requires logging infrastructure (CloudTrail equivalent), retention policy, query interface |
+
+These features are the management plane -- they surround the authorization engine
+but don't affect how policies are evaluated. The Cedar evaluation engine, policy
+format, and entity model are identical whether managed by AVP or by this PDP.
+The delta is in how policies get into the system and how decisions get logged out.
+
+**Self-contained engineering work (no infrastructure dependency):**
+- AuthZen endpoint (`/access/v1/evaluation`) -- open standard alternative to AVP format
+- Shadow mode enforcement toggle -- log decisions without enforcing, for rollout
+- Tier 2 entity resolution (DB-backed roles/entitlements beyond JWT claims)
+- Policy CI/CD pipeline (lint, test, deploy `.cedar` files)
 
 
 ## Performance Baselines
@@ -292,6 +324,11 @@ request time and shrinks proportionally as policy complexity grows.
 All stress tests verify correctness, not just throughput. Every response is
 validated against expected ALLOW/DENY decision. Error requests must return
 200 with DENY decision (fail-closed), not 500.
+
+For comparison: AVP's default service quota is 200 `IsAuthorized` requests/second
+(requestable up to 1,000). This PDP sustains 2,500+ req/s on a single core at
+c=2000 with zero errors, and 87K+ RPS on the native endpoint at c=100.
+Latency is sub-millisecond (local eval) vs AVP's network round-trip to AWS.
 
 ### Capacity Planning
 
