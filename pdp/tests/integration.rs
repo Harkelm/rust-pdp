@@ -257,14 +257,11 @@ async fn test_batch_permit_and_deny() {
     let client = reqwest::Client::new();
 
     // Two requests: admin (Allow) and viewer-delete (Deny)
-    let mut admin_req = common::admin_allow_request();
-    admin_req["context"] = serde_json::json!({});
-    let mut viewer_req = common::viewer_deny_request();
-    viewer_req["context"] = serde_json::json!({});
-
     let resp = client
         .post(format!("http://{addr}/v1/batch_is_authorized"))
-        .json(&serde_json::json!({ "requests": [admin_req, viewer_req] }))
+        .json(&serde_json::json!({
+            "requests": [common::admin_allow_request(), common::viewer_deny_request()]
+        }))
         .send()
         .await
         .unwrap();
