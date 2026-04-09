@@ -55,6 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/healthz", get(handlers::healthz))
         .route("/readyz", get(handlers::readyz))
         .route("/health", get(handlers::health))
+        .route("/avp/is-authorized", post(handlers::avp_is_authorized))
+        .route("/avp/batch-is-authorized", post(handlers::avp_batch_is_authorized))
         .layer(middleware::from_fn(handlers::request_id_layer))
         .with_state(ctx.clone());
 
